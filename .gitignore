@@ -1,0 +1,54 @@
+# 배포 아티팩트
+*.zip
+dist/
+build/
+.aws-sam/
+
+# 환경 설정 — 계정 ID·ARN·버킷명이 들어가는 파일이다. 절대 커밋하지 않는다.
+.env
+.env.*
+!.env.example
+*.tfvars
+!*.tfvars.example
+outputs.json
+stack-outputs.json
+
+# IaC 상태 — 리소스 ARN 전체가 평문으로 들어간다
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+cdk.out/
+cdk.context.json
+
+# 자격증명
+*.pem
+*.key
+credentials
+.aws/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+.parcel-cache/
+
+# 측정 원시 데이터 — 세션 ID·런타임 ID가 들어갈 수 있다
+bench-*.json
+bench-*.csv
+results/
+
+# 에디터·OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

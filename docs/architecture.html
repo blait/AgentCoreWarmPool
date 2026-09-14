@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCore Runtime 웜풀 아키텍처 — 방식 1 / 방식 2</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#1a1d21; --muted:#5c6470; --line:#dfe3e8;
+  --blue:#0972d3; --blue-bg:#f0f7ff; --green:#037f51; --green-bg:#effaf5;
+  --amber:#8d6e00; --amber-bg:#fffbe6; --red:#c7341c; --red-bg:#fff5f3;
+  --purple:#6b39c9; --purple-bg:#f7f3ff;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
+
+header{margin-bottom:28px}
+h1{font-size:26px;margin:0 0 8px;letter-spacing:-.3px}
+.sub{color:var(--muted);font-size:14px}
+.meta{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}
+.pill{font-size:12px;padding:4px 11px;border-radius:20px;background:var(--card);
+      border:1px solid var(--line);color:var(--muted)}
+.pill.m{background:var(--green-bg);border-color:#b6e5ce;color:var(--green);font-weight:600}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+      padding:24px 26px;margin-bottom:20px}
+h2{font-size:20px;margin:0 0 4px;letter-spacing:-.2px}
+h2 .n{display:inline-block;width:27px;height:27px;line-height:27px;text-align:center;
+      border-radius:7px;background:var(--ink);color:#fff;font-size:14px;margin-right:9px}
+h3{font-size:15px;margin:26px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+h4{font-size:14px;margin:18px 0 8px;color:var(--muted);text-transform:uppercase;
+   letter-spacing:.6px;font-weight:700}
+p{margin:0 0 12px}
+.lede{color:var(--muted);font-size:14px;margin-bottom:18px}
+
+pre{background:#0f1419;color:#dde3ea;padding:18px 20px;border-radius:9px;
+    overflow-x:auto;font:12.5px/1.65 var(--mono);margin:12px 0}
+pre.d{background:#fbfcfd;color:var(--ink);border:1px solid var(--line);
+      font-size:12px;line-height:1.55}
+code{font-family:var(--mono);font-size:.9em;background:#eef1f4;
+     padding:2px 6px;border-radius:4px}
+pre code{background:none;padding:0;font-size:inherit}
+.c-b{color:#6cb6ff} .c-g{color:#6bd6a0} .c-a{color:#e5c07b} .c-m{color:#8a94a6}
+
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);
+      vertical-align:top}
+th{background:#f9fafb;font-weight:700;font-size:12.5px;color:var(--muted);
+   text-transform:uppercase;letter-spacing:.4px}
+tbody tr:last-child td{border-bottom:none}
+td.k{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+
+.note{border-left:3px solid var(--blue);background:var(--blue-bg);
+      padding:13px 17px;border-radius:0 7px 7px 0;margin:14px 0;font-size:13.5px}
+.warn{border-left-color:var(--amber);background:var(--amber-bg)}
+.bad{border-left-color:var(--red);background:var(--red-bg)}
+.good{border-left-color:var(--green);background:var(--green-bg)}
+.note b{display:block;margin-bottom:3px}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:16px 0}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.box{border:1px solid var(--line);border-radius:9px;padding:16px 18px;background:#fcfdfe}
+.box h5{margin:0 0 9px;font-size:13.5px;display:flex;align-items:center;gap:7px}
+.box.w1 h5::before{content:"1";width:19px;height:19px;line-height:19px;text-align:center;
+  border-radius:5px;background:var(--purple);color:#fff;font-size:11px;flex:0 0 auto}
+.box.w2 h5::before{content:"2";width:19px;height:19px;line-height:19px;text-align:center;
+  border-radius:5px;background:var(--blue);color:#fff;font-size:11px;flex:0 0 auto}
+.box ul{margin:0;padding-left:19px;font-size:13px}
+.box li{margin-bottom:5px}
+
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;
+     border-radius:4px;margin-right:5px;vertical-align:1px}
+.t-ok{background:var(--green-bg);color:var(--green)}
+.t-no{background:var(--red-bg);color:var(--red)}
+.t-w{background:var(--amber-bg);color:var(--amber)}
+.t-i{background:var(--blue-bg);color:var(--blue)}
+
+.steps{counter-reset:s;list-style:none;padding:0;margin:14px 0}
+.steps li{counter-increment:s;position:relative;padding:11px 0 11px 42px;
+          border-bottom:1px solid var(--line);font-size:13.5px}
+.steps li:last-child{border-bottom:none}
+.steps li::before{content:counter(s);position:absolute;left:0;top:11px;
+  width:25px;height:25px;line-height:25px;text-align:center;border-radius:50%;
+  background:var(--blue-bg);color:var(--blue);font-weight:700;font-size:12px}
+.steps b{color:var(--ink)}
+
+.lat{display:inline-block;font-family:var(--mono);font-size:12px;font-weight:700;
+     padding:2px 7px;border-radius:4px}
+.lat.f{background:var(--green-bg);color:var(--green)}
+.lat.s{background:var(--red-bg);color:var(--red)}
+
+.toc{background:var(--card);border:1px solid var(--line);border-radius:12px;
+     padding:18px 24px;margin-bottom:22px}
+.toc ol{margin:0;padding-left:22px;font-size:13.5px;columns:2;column-gap:32px}
+.toc li{margin-bottom:5px}
+.toc a{color:var(--blue);text-decoration:none}
+.toc a:hover{text-decoration:underline}
+
+
+.fig{margin:18px 0}
+.fig svg{width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:9px}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:9px;padding-left:2px;line-height:1.6}
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",sans-serif}
+svg .zt{font-size:12px;font-weight:700;letter-spacing:.3px}
+svg .nt{font-size:12.5px;font-weight:700;text-anchor:middle;fill:#1a1d21}
+svg .ns{font-size:10.5px;text-anchor:middle;fill:#5c6470}
+svg .nm{font-size:11px;fill:#1a1d21}
+svg text.nm[text-anchor],svg .nt,svg .ns{}
+svg .lat{font-size:12px;font-weight:700;text-anchor:middle;fill:#037f51;
+         font-family:ui-monospace,Menlo,monospace}
+svg .st{font-size:9px;text-anchor:middle;fill:#8d6e00;
+        font-family:ui-monospace,Menlo,monospace}
+svg .n-b{fill:#f0f7ff;stroke:#bcd9f5}
+svg .n-b2{fill:#fff;stroke:#0972d3;stroke-width:1.6}
+svg .n-g{fill:#effaf5;stroke:#b6e5ce}
+svg .n-a{fill:#fffbe6;stroke:#f0dfa0}
+svg .n-a2{fill:#fff;stroke:#f0dfa0;stroke-dasharray:4 3}
+svg .n-p{fill:#f7f3ff;stroke:#d9c9f5}
+svg .n-v{fill:#fff;stroke:#6b39c9;stroke-width:1.6}
+svg .n-r{fill:#fff5f3;stroke:#f5c6ba}
+svg .slot rect{fill:#fff;stroke:#f0dfa0}
+svg .div{stroke:#dfe3e8;stroke-width:1}
+svg .e{stroke:#5c6470;stroke-width:1.5;fill:none}
+svg .e-b{stroke:#0972d3;stroke-width:1.7;fill:none}
+svg .e-g{stroke:#037f51;stroke-width:1.5;fill:none}
+svg .e-a{stroke:#8d6e00;stroke-width:1.5;fill:none}
+svg .e-r{stroke:#c7341c;stroke-width:1.4;fill:none}
+footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);
+       color:var(--muted);font-size:12.5px}
+.src{font-size:12px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>AgentCore Runtime 웜풀 아키텍처</h1>
+  <div class="sub">콜드스타트 제거를 위한 SQS 사전 예열 세션 풀 — 세션 ID 관리 방식 2종 비교</div>
+  <div class="meta">
+    <span class="pill m">실측 기준 콜드 1,328ms → 웜 101ms</span>
+    <span class="pill">ap-northeast-2</span>
+    <span class="pill">idle 15분 유지 전제</span>
+    <span class="pill">2026-09-11</span>
+  </div>
+</header>
+
+<div class="toc">
+  <ol>
+    <li><a href="#why">왜 필요한가 — 실측 근거</a></li>
+    <li><a href="#comp">공통 컴포넌트</a></li>
+    <li><a href="#w1">방식 1 — 클라이언트 타이머</a></li>
+    <li><a href="#w2">방식 2 — Redis TTL <span class="tag t-ok">추천</span></a></li>
+    <li><a href="#hb">Heartbeat — 재고 유지</a></li>
+    <li><a href="#sc">시나리오별 동작</a></li>
+    <li><a href="#size">풀 크기 산정</a></li>
+    <li><a href="#risk">리스크와 미확인 사항</a></li>
+    <li><a href="#live">실배포 검증 결과 <span class="tag t-ok">신규</span></a></li>
+  </ol>
+</div>
+
+<!-- ─────────────────────────── 1 ─────────────────────────── -->
+<section class="card" id="why">
+<h2><span class="n">1</span>왜 필요한가 — 실측 근거</h2>
+<p class="lede">
+동일 코드를 두 배포 방식으로 서울 리전에 배포해 측정한 결과입니다. 세션 재사용의
+이득이 배포 방식 선택보다 훨씬 큽니다.
+</p>
+
+<table>
+<thead><tr><th>구분</th><th>p50</th><th>비고</th></tr></thead>
+<tbody>
+<tr><td><b>콜드스타트</b> (직접 코드)</td><td><span class="lat s">1,328ms</span></td><td>새 microVM 프로비저닝</td></tr>
+<tr><td><b>웜스타트</b> (세션 재사용)</td><td><span class="lat f">101ms</span></td><td><b>13배 빠름</b></td></tr>
+<tr><td>콜드스타트 (컨테이너, 예열 히트)</td><td><span class="lat f">379ms</span></td><td>AWS 관리형 풀 — <b>10개 한정</b></td></tr>
+<tr><td>콜드스타트 (컨테이너, 풀 소진)</td><td><span class="lat s">3,337ms</span></td><td>직접 코드보다 2.4배 느림</td></tr>
+</tbody>
+</table>
+
+<div class="note warn">
+  <b>AWS 관리형 웜풀은 10개입니다 (실측)</b>
+  버스트 30개·60개 테스트에서 모두 정확히 10건만 예열 히트했습니다. 크기 지정·조회 API가
+  없고(<code>CreateAgentRuntime</code> 파라미터에 없음), Service Quotas에도 항목이 없습니다.
+  <b>필요량(수백 개)에 미달하므로 자체 풀을 만드는 것입니다.</b>
+</div>
+
+<div class="note">
+  <b>목표</b>
+  게임 중 <b>지속적이면서 간헐적으로</b> 질문받는 챗봇. 유저가 콜드스타트를 못 견뎌
+  idle을 15분으로 잡았고, 그 상태에서 <b>모든 요청을 101ms로 처리</b>하는 것이 목표입니다.
+</div>
+
+<h3>왜 idle 축소나 idle=0이 답이 아닌가</h3>
+<table>
+<thead><tr><th>안</th><th>결과</th><th>판정</th></tr></thead>
+<tbody>
+<tr><td class="k">idle = 0</td>
+    <td><code>REJECTED: valid min value: 60</code> — 실측</td>
+    <td><span class="tag t-no">불가</span></td></tr>
+<tr><td class="k">idle = 60초</td>
+    <td>질문 주기가 60초보다 길면 매 질문이 새 세션 → 세션 생성률 <b>183 TPS</b></td>
+    <td><span class="tag t-no">쿼터 초과</span></td></tr>
+<tr><td class="k">idle = 15분 (현행)</td>
+    <td>동시 세션 71,500 — 그중 약 77%가 유저가 떠난 유휴 꼬리</td>
+    <td><span class="tag t-w">웜풀 필요</span></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ─────────────────────────── 2 ─────────────────────────── -->
+<section class="card" id="comp">
+<h2><span class="n">2</span>공통 컴포넌트</h2>
+<p class="lede">두 방식이 공유하는 부분입니다. 차이는 <b>세션 ID를 누가 어떻게 기억하는가</b>뿐입니다.</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 640" role="img" aria-label="AgentCore 웜풀 전체 아키텍처">
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#5c6470"/></marker>
+  <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#0972d3"/></marker>
+  <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#037f51"/></marker>
+  <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8d6e00"/></marker>
+  <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#c7341c"/></marker>
+</defs>
+<!-- ===== 예열 파이프라인 (상단 존) ===== -->
+<rect x="18" y="16" width="1044" height="236" rx="10" fill="#f7f3ff" stroke="#d9c9f5" stroke-dasharray="5 4"/>
+<text x="38" y="42" class="zt" fill="#6b39c9">예열 파이프라인 · 비동기 (유저 대기시간 아님)</text>
+
+<!-- EventBridge -->
+<rect x="42" y="62" width="150" height="62" rx="8" class="n-p"/>
+<text x="117" y="86" class="nt">EventBridge</text>
+<text x="117" y="105" class="ns">주기 트리거</text>
+
+<!-- replenish Lambda -->
+<rect x="248" y="56" width="212" height="118" rx="8" class="n-p"/>
+<text x="354" y="80" class="nt">replenish Lambda</text>
+<text x="262" y="104" class="nm">① uuid4() 생성</text>
+<text x="262" y="122" class="nm">② warmup 인보크</text>
+<text x="262" y="140" class="nm">③ SQS 적재</text>
+<text x="354" y="162" class="ns">보충 = pop 발생 시</text>
+
+<!-- microVM 부팅 -->
+<rect x="516" y="56" width="176" height="74" rx="8" class="n-g"/>
+<text x="604" y="80" class="nt">microVM 부팅</text>
+<text x="604" y="99" class="ns">1,328ms</text>
+<text x="604" y="118" class="ns" fill="#037f51">유저 대기 아님</text>
+
+<!-- SQS -->
+<rect x="748" y="56" width="290" height="118" rx="8" class="n-a"/>
+<text x="893" y="80" class="nt">SQS FIFO Queue</text>
+<g class="slot">
+  <rect x="766" y="94" width="48" height="26" rx="4"/><text x="790" y="111" class="st">uuid</text>
+  <rect x="820" y="94" width="48" height="26" rx="4"/><text x="844" y="111" class="st">uuid</text>
+  <rect x="874" y="94" width="48" height="26" rx="4"/><text x="898" y="111" class="st">uuid</text>
+  <rect x="928" y="94" width="48" height="26" rx="4"/><text x="952" y="111" class="st">uuid</text>
+</g>
+<text x="998" y="111" class="nm" fill="#8d6e00">···</text>
+<text x="893" y="142" class="ns">예열 세션 재고 · 목표 N ≈ 214</text>
+<text x="893" y="160" class="ns" fill="#c7341c">큐에 있다 ≠ 살아있다</text>
+
+<!-- heartbeat -->
+<rect x="248" y="196" width="444" height="40" rx="8" class="n-a2"/>
+<text x="470" y="221" class="nt" fill="#8d6e00">heartbeat — 12~13분마다 재고에 warmup 핑 (idle 타이머 리셋)</text>
+
+<!-- 예열 화살표 -->
+<line x1="192" y1="93" x2="242" y2="93" class="e" marker-end="url(#ar)"/>
+<line x1="460" y1="93" x2="510" y2="93" class="e" marker-end="url(#arG)"/>
+<path d="M604,130 L604,150 L730,150 L730,115 L742,115" class="e" fill="none" marker-end="url(#arA)"/>
+<path d="M692,216 L720,216 L720,180 L893,180 L893,174" class="e-a" fill="none" marker-end="url(#arA)"/>
+
+<!-- ===== 요청 경로 (하단 존) ===== -->
+<rect x="18" y="286" width="1044" height="336" rx="10" fill="#f0f7ff" stroke="#bcd9f5" stroke-dasharray="5 4"/>
+<text x="38" y="312" class="zt" fill="#0972d3">요청 경로 · 동기 (유저가 기다리는 구간)</text>
+
+<!-- 클라이언트 -->
+<rect x="42" y="336" width="140" height="72" rx="8" class="n-b"/>
+<text x="112" y="360" class="nt">게임 클라이언트</text>
+<text x="112" y="380" class="nm">userId</text>
+<text x="112" y="397" class="nm">질문</text>
+
+<!-- ALB -->
+<rect x="216" y="348" width="84" height="48" rx="8" class="n-b"/>
+<text x="258" y="377" class="nt">ALB</text>
+
+<!-- 프록시 -->
+<rect x="334" y="326" width="248" height="184" rx="8" class="n-b2"/>
+<text x="458" y="350" class="nt">프록시 (Lambda / ECS)</text>
+<text x="458" y="369" class="ns" fill="#c7341c">방식 1·2 차이가 여기에만 있음</text>
+<line x1="348" y1="380" x2="568" y2="380" class="div"/>
+<text x="350" y="402" class="nm">uuid 결정</text>
+<text x="350" y="422" class="nm">├ 보유 중 → 재사용</text>
+<text x="350" y="442" class="nm">└ 만료·없음 → SQS pop</text>
+<text x="350" y="468" class="nm" fill="#c7341c">장애 시 pop 금지</text>
+<text x="350" y="488" class="ns">(풀 고갈 → 전면 콜드스타트)</text>
+
+<!-- getSessionId -->
+<rect x="334" y="536" width="248" height="52" rx="8" class="n-p"/>
+<text x="458" y="558" class="nt">getSessionId</text>
+<text x="458" y="576" class="ns">pop + replenish 트리거</text>
+
+<!-- AgentCore Runtime -->
+<rect x="638" y="326" width="200" height="122" rx="8" class="n-g"/>
+<text x="738" y="350" class="nt">AgentCore Runtime</text>
+<text x="738" y="370" class="ns">runtimeSessionId = uuid</text>
+<rect x="656" y="382" width="164" height="46" rx="6" fill="#fff" stroke="#b6e5ce"/>
+<text x="738" y="401" class="nt" fill="#037f51">warm microVM</text>
+<text x="738" y="419" class="lat">101ms</text>
+
+<!-- Memory -->
+<rect x="638" y="480" width="200" height="88" rx="8" class="n-b"/>
+<text x="738" y="504" class="nt">AgentCore Memory</text>
+<text x="738" y="524" class="nm" text-anchor="middle">actorId = userId</text>
+<text x="738" y="542" class="nm" text-anchor="middle">sessionId = chat-{userId}</text>
+<text x="738" y="560" class="ns" fill="#0972d3">uuid와 독립 → 이력 유지</text>
+
+<!-- 상태저장소 -->
+<rect x="884" y="326" width="156" height="122" rx="8" class="n-r"/>
+<text x="962" y="350" class="nt">상태 저장소</text>
+<text x="962" y="369" class="ns">Redis 또는 DDB</text>
+<line x1="898" y1="380" x2="1026" y2="380" class="div"/>
+<text x="962" y="401" class="nm" text-anchor="middle">sess:{userId}</text>
+<text x="962" y="420" class="nm" text-anchor="middle">→ uuid</text>
+<text x="962" y="440" class="nm" text-anchor="middle" fill="#c7341c">TTL 780초</text>
+
+<!-- 요청 화살표 -->
+<line x1="182" y1="372" x2="210" y2="372" class="e-b" marker-end="url(#arB)"/>
+<line x1="300" y1="372" x2="328" y2="372" class="e-b" marker-end="url(#arB)"/>
+<line x1="582" y1="388" x2="632" y2="388" class="e-b" marker-end="url(#arB)"/>
+<line x1="738" y1="448" x2="738" y2="474" class="e-b" marker-end="url(#arB)"/>
+<line x1="878" y1="388" x2="838" y2="388" class="e-r"/>
+<line x1="838" y1="388" x2="878" y2="388" class="e-r" marker-end="url(#arR)"/>
+<path d="M458,510 L458,530" class="e" marker-end="url(#ar)"/>
+<path d="M582,562 L610,562 L610,250 L893,250 L893,180" class="e-a" fill="none" stroke-dasharray="4 3" marker-end="url(#arA)"/>
+<text x="622" y="243" class="ns" fill="#8d6e00">pop (1회용)</text>
+
+<!-- 범례 -->
+<text x="38" y="608" class="ns">실선 = 동기 요청 · 점선 = 비동기 · 프록시↔저장소는 왕복 조회</text>
+</svg>
+<figcaption>전체 아키텍처 — 상단은 유저와 무관하게 도는 예열 파이프라인, 하단이 유저 요청 경로. 두 방식의 차이는 프록시의 uuid 결정 로직에만 있다.</figcaption>
+</div>
+
+<h3>컴포넌트 설명</h3>
+<table>
+<thead><tr><th>컴포넌트</th><th>역할</th><th>핵심 주의사항</th></tr></thead>
+<tbody>
+<tr><td class="k">replenish<br>Lambda</td>
+    <td>uuid 생성 → warmup 인보크 → 큐 적재. <b>pop 발생 시 트리거</b>되어 소비량만큼 보충</td>
+    <td>보충 속도가 <code>L-8EE2AEA2</code>(세션 생성률 25 TPS)에 종속</td></tr>
+<tr><td class="k">SQS FIFO</td>
+    <td>예열된 uuid 재고 보관</td>
+    <td><b>큐에 있다 ≠ 살아있다.</b> 15분 지나면 microVM만 죽고 uuid 껍데기가 남음 → §5</td></tr>
+<tr><td class="k">getSessionId</td>
+    <td>큐에서 pop해 프록시에 전달 + 보충 트리거</td>
+    <td><b>pop 후 큐에서 즉시 제거</b> — 재사용하면 두 유저가 같은 세션 공유</td></tr>
+<tr><td class="k">프록시</td>
+    <td>uuid 결정 → 인보크. <b>방식 1·2의 차이가 여기에만 있음</b></td>
+    <td>Redis/DDB 조회 실패 시 폴백 정책 필요 → §8</td></tr>
+<tr><td class="k">agent<br>handler</td>
+    <td>warmup 요청을 <b>조기 반환</b>해 LLM·툴 실행을 건너뜀</td>
+    <td>⚠️ 조기 반환 위치가 중요 → 아래</td></tr>
+</tbody>
+</table>
+
+<h4>agent handler — warmup 조기 반환</h4>
+<pre><code><span class="c-m"># 모듈 스코프 — microVM 부팅 시 실행. 여기서 무거운 초기화를 끝내야 예열 효과가 있다.</span>
+import langgraph, redis          <span class="c-m"># ← warmup 이 이걸 데워줘야 의미가 있음</span>
+_redis = redis.Redis(connection_pool=_pool)   <span class="c-m"># 커넥션은 lazy 라 객체 생성은 가벼움</span>
+
+def handler(payload):
+    <span class="c-a">if payload.get("type") == "warmup":</span>
+        <span class="c-a">return {"status": "warm"}</span>   <span class="c-m"># LLM·툴·과금 compute 만 건너뜀</span>
+    ...실제 처리...</code></pre>
+
+<div class="note bad">
+  <b>함정 — lazy import 를 과하게 쓰면 예열이 무의미해집니다</b>
+  무거운 <code>import</code>를 핸들러 안으로 옮기면 warmup은 통과하는데
+  <b>첫 질문에서 초기화가 터져 콜드스타트가 그대로 발생</b>합니다.
+  조기 반환은 <b>LLM 호출과 툴 실행만</b> 건너뛰어야 하고, import·클라이언트 생성은
+  모듈 스코프에서 이미 끝나 있어야 합니다.
+  <br><br>
+  단 <b>Redis 클라이언트는 모듈 스코프 유지</b>가 맞습니다. 핸들러 내부에서 생성하면
+  요청마다 커넥션이 늘어납니다.
+</div>
+
+<h4>세션 ID 두 종류 — 반드시 분리</h4>
+<table>
+<thead><tr><th></th><th>값</th><th>수명</th><th>용도</th></tr></thead>
+<tbody>
+<tr><td class="k">runtimeSessionId</td><td><code>uuid4()</code> — 매번 다름</td>
+    <td>microVM과 함께 소멸</td><td>실행 환경 식별</td></tr>
+<tr><td class="k">Memory sessionId</td><td><code>chat-{userId}</code> — 유저 고정</td>
+    <td><b>영구</b> (7~365일)</td><td>대화 이력</td></tr>
+</tbody>
+</table>
+
+<div class="note good">
+  <b>이 분리가 웜풀 성립의 전제입니다</b>
+  둘을 같게 쓰면 세션 ID가 이미 유저 것으로 정해져 <b>풀에서 꺼내 쓸 수 없습니다.</b>
+  분리하면 uuid가 매번 바뀌어도 <code>ListEvents(sessionId="chat-{userId}")</code>로
+  이력이 복원됩니다.
+  <br><br>
+  <b>확인할 코드 한 줄:</b>
+  <code>memory.create_event(sessionId=<b>f"chat-{user_id}"</b>, actorId=user_id, ...)</code>
+  — 여기에 <code>runtime_session_id</code>가 들어가 있으면 안 됩니다.
+</div>
+<div class="src">
+  ※ <code>runtimeUserId</code> 파라미터가 존재하지만 <b>세션에 고정되지 않습니다</b>(실측:
+  같은 세션에 다른 <code>runtimeUserId</code>로 호출해도 통과). <b>인증 수단으로 쓰지 마십시오.</b>
+</div>
+</section>
+
+<!-- ─────────────────────────── 3 ─────────────────────────── -->
+<section class="card" id="w1">
+<h2><span class="n">3</span>방식 1 — 클라이언트 타이머</h2>
+<p class="lede">클라이언트가 uuid와 마지막 호출 시각을 보관하고, <b>13분 경과를 직접 계산</b>합니다.</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 340" role="img" aria-label="방식 1 클라이언트 타이머">
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#5c6470"/></marker>
+  <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#0972d3"/></marker>
+  <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#037f51"/></marker>
+  <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8d6e00"/></marker>
+  <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#c7341c"/></marker>
+</defs>
+<!-- 클라이언트 -->
+<rect x="24" y="40" width="228" height="150" rx="8" class="n-v"/>
+<text x="138" y="64" class="nt">게임 클라이언트</text>
+<text x="138" y="83" class="ns" fill="#6b39c9">로컬 상태 보관</text>
+<line x1="38" y1="94" x2="238" y2="94" class="div"/>
+<text x="40" y="116" class="nm">uuid = "a3f9…"</text>
+<text x="40" y="136" class="nm">lastCallAt = 178903…</text>
+<line x1="38" y1="150" x2="238" y2="150" class="div"/>
+<text x="138" y="171" class="nm" text-anchor="middle" fill="#c7341c">now − lastCallAt &gt; 780 ?</text>
+
+<!-- 분기 -->
+<path d="M252,100 L300,100 L300,66 L336,66" class="e-g" fill="none" marker-end="url(#arG)"/>
+<text x="308" y="58" class="ns" fill="#037f51">false — 13분 이내</text>
+<path d="M252,150 L300,150 L300,196 L336,196" class="e-a" fill="none" marker-end="url(#arA)"/>
+<text x="308" y="215" class="ns" fill="#8d6e00">true — 13분 초과</text>
+
+<!-- 기존 uuid -->
+<rect x="336" y="42" width="196" height="48" rx="8" class="n-g"/>
+<text x="434" y="62" class="nt">기존 uuid 그대로</text>
+<text x="434" y="80" class="ns">큐 소비 0</text>
+
+<!-- getSessionId -->
+<rect x="336" y="172" width="196" height="48" rx="8" class="n-p"/>
+<text x="434" y="192" class="nt">GET /getSessionId</text>
+<text x="434" y="210" class="ns">SQS pop → 새 uuid</text>
+
+<!-- 합류 -->
+<path d="M532,66 L580,66 L580,116 L616,116" class="e" fill="none" marker-end="url(#ar)"/>
+<path d="M532,196 L580,196 L580,140 L616,140" class="e" fill="none" marker-end="url(#ar)"/>
+
+<!-- 프록시 -->
+<rect x="616" y="96" width="176" height="64" rx="8" class="n-b"/>
+<text x="704" y="120" class="nt">프록시</text>
+<text x="704" y="140" class="nm" text-anchor="middle">{ uuid, userId, 질문 }</text>
+
+<!-- Runtime -->
+<rect x="848" y="90" width="200" height="76" rx="8" class="n-g"/>
+<text x="948" y="114" class="nt">AgentCore Runtime</text>
+<text x="948" y="133" class="ns">warm microVM</text>
+<text x="948" y="153" class="lat">101ms</text>
+<line x1="792" y1="128" x2="842" y2="128" class="e-b" marker-end="url(#arB)"/>
+
+<!-- 경고 -->
+<rect x="24" y="250" width="1024" height="62" rx="8" fill="#fff5f3" stroke="#f5c6ba"/>
+<text x="44" y="274" class="nt" fill="#c7341c">uuid 위조 위험</text>
+<text x="44" y="296" class="nm">클라이언트가 uuid를 보유 → 남의 uuid로 그 세션에 붙을 수 있음. runtimeUserId는 검증되지 않음(실측). 막으려면 서버 저장소가 필요해져 방식 1의 이점이 사라진다.</text>
+</svg>
+<figcaption>방식 1 — 클라이언트가 시각을 비교해 uuid 교체 여부를 판단한다. 추가 인프라가 없는 대신 클라이언트 수정과 위조 리스크가 따른다.</figcaption>
+</div>
+
+<div class="grid">
+  <div class="box w1">
+    <h5>장점</h5>
+    <ul>
+      <li><b>추가 인프라 0</b> — Redis·DynamoDB 불필요</li>
+      <li>조회 지연 0 (로컬 메모리)</li>
+      <li>외부 저장소 장애와 무관</li>
+    </ul>
+  </div>
+  <div class="box w1">
+    <h5>단점</h5>
+    <ul>
+      <li><b>게임 클라이언트 수정 필요</b> — 배포 주기에 묶임</li>
+      <li>시간 비교 로직이 클라이언트에 상주</li>
+      <li><b>uuid 위조 가능</b> — 남의 세션에 붙을 수 있음</li>
+      <li>멀티 디바이스 시 기기별 세션 → 세션 수 증가</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note bad">
+  <b>보안 — uuid 위조</b>
+  클라이언트가 uuid를 들고 있으면 <b>다른 유저의 uuid를 보내 그 세션에 붙을 수 있습니다.</b>
+  <code>runtimeUserId</code>는 검증되지 않습니다(실측). 막으려면 프록시에서
+  uuid↔userId 매핑을 검증해야 하고, <b>그러려면 서버 저장소가 다시 필요해져
+  방식 1의 이점이 사라집니다.</b>
+</div>
+
+<div class="note warn">
+  <b>타이머 스레드는 필요 없습니다</b>
+  백그라운드 타이머가 아니라 <b>요청 보낼 때 시각 비교 1회</b>입니다. 리소스 부담 없습니다.
+</div>
+</section>
+
+<!-- ─────────────────────────── 4 ─────────────────────────── -->
+<section class="card" id="w2">
+<h2><span class="n">4</span>방식 2 — Redis TTL <span class="tag t-ok" style="font-size:12px">추천</span></h2>
+<p class="lede">
+Redis에 <b>TTL 780초</b>로 uuid를 저장합니다. 만료 판단을 Redis가 대신하므로
+<b>시간 비교 코드가 사라지고, 클라이언트는 uuid를 아예 모릅니다.</b>
+</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 380" role="img" aria-label="방식 2 Redis TTL">
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#5c6470"/></marker>
+  <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#0972d3"/></marker>
+  <marker id="arG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#037f51"/></marker>
+  <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8d6e00"/></marker>
+  <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#c7341c"/></marker>
+</defs>
+<!-- 클라이언트 -->
+<rect x="24" y="96" width="196" height="80" rx="8" class="n-b"/>
+<text x="122" y="120" class="nt">게임 클라이언트</text>
+<text x="122" y="140" class="nm" text-anchor="middle">{ userId, 질문 }</text>
+<text x="122" y="160" class="ns" fill="#0972d3">uuid 모름 · 수정 불필요</text>
+
+<!-- 프록시 -->
+<rect x="284" y="52" width="292" height="172" rx="8" class="n-b2"/>
+<text x="430" y="76" class="nt">프록시</text>
+<line x1="298" y1="88" x2="562" y2="88" class="div"/>
+<text x="300" y="110" class="nm">uuid = redis.get(sess:{userId})</text>
+<rect x="300" y="124" width="120" height="38" rx="5" fill="#effaf5" stroke="#b6e5ce"/>
+<text x="360" y="140" class="nt" fill="#037f51">HIT</text>
+<text x="360" y="155" class="ns">그 uuid 사용</text>
+<rect x="440" y="124" width="120" height="38" rx="5" fill="#fffbe6" stroke="#f0dfa0"/>
+<text x="500" y="140" class="nt" fill="#8d6e00">MISS</text>
+<text x="500" y="155" class="ns">SQS pop</text>
+<text x="430" y="184" class="nm" text-anchor="middle">setex(k, 780, uuid)</text>
+<text x="430" y="204" class="ns" fill="#c7341c">조회 실패 시 pop 금지</text>
+
+<line x1="220" y1="136" x2="278" y2="136" class="e-b" marker-end="url(#arB)"/>
+
+<!-- Redis -->
+<rect x="284" y="272" width="292" height="88" rx="8" class="n-r"/>
+<text x="430" y="296" class="nt">Redis</text>
+<text x="430" y="316" class="nm" text-anchor="middle">key sess:{userId} → uuid</text>
+<text x="430" y="337" class="nm" text-anchor="middle" fill="#c7341c">TTL 780초 (13분)</text>
+<text x="430" y="354" class="ns">AgentCore 15분보다 짧게 → 만료를 Redis가 판단</text>
+<path d="M400,224 L400,266" class="e-r" fill="none" marker-end="url(#arR)"/>
+<path d="M460,266 L460,224" class="e-r" fill="none" marker-end="url(#arR)"/>
+
+<!-- SQS -->
+<rect x="284" y="16" width="292" height="26" rx="6" class="n-a"/>
+<text x="430" y="34" class="ns" fill="#8d6e00">SQS FIFO — MISS 일 때만 pop</text>
+<path d="M500,124 L500,48" class="e-a" fill="none" stroke-dasharray="4 3" marker-end="url(#arA)"/>
+
+<!-- Runtime -->
+<rect x="644" y="76" width="212" height="104" rx="8" class="n-g"/>
+<text x="750" y="100" class="nt">AgentCore Runtime</text>
+<text x="750" y="119" class="ns">runtimeSessionId = uuid</text>
+<rect x="662" y="130" width="176" height="38" rx="6" fill="#fff" stroke="#b6e5ce"/>
+<text x="750" y="148" class="nt" fill="#037f51">warm microVM</text>
+<text x="750" y="163" class="lat">101ms</text>
+<line x1="576" y1="128" x2="638" y2="128" class="e-b" marker-end="url(#arB)"/>
+
+<!-- Memory -->
+<rect x="644" y="240" width="212" height="96" rx="8" class="n-b"/>
+<text x="750" y="264" class="nt">AgentCore Memory</text>
+<text x="750" y="284" class="nm" text-anchor="middle">actorId = userId</text>
+<text x="750" y="303" class="nm" text-anchor="middle">sessionId = chat-{userId}</text>
+<text x="750" y="324" class="ns" fill="#0972d3">uuid 바뀌어도 이력 유지</text>
+<line x1="750" y1="180" x2="750" y2="234" class="e-b" marker-end="url(#arB)"/>
+
+<!-- 요약 -->
+<rect x="900" y="76" width="156" height="260" rx="8" fill="#effaf5" stroke="#b6e5ce"/>
+<text x="978" y="100" class="nt" fill="#037f51">이 방식의 이점</text>
+<line x1="914" y1="112" x2="1042" y2="112" class="div"/>
+<text x="916" y="136" class="nm">클라이언트 수정</text>
+<text x="916" y="154" class="nm" fill="#037f51">불필요</text>
+<text x="916" y="182" class="nm">시간 비교 코드</text>
+<text x="916" y="200" class="nm" fill="#037f51">없음 (TTL이 판단)</text>
+<text x="916" y="228" class="nm">uuid 위조</text>
+<text x="916" y="246" class="nm" fill="#037f51">불가</text>
+<text x="916" y="274" class="nm">배포 범위</text>
+<text x="916" y="292" class="nm" fill="#037f51">서버만</text>
+<text x="916" y="320" class="nm" fill="#c7341c">Redis 장애 전파 주의</text>
+</svg>
+<figcaption>방식 2 — 만료 판단을 Redis TTL에 위임한다. 클라이언트는 userId만 보내므로 게임 클라이언트를 고치지 않아도 된다.</figcaption>
+</div>
+
+<h4>프록시 로직 — 이게 전부입니다</h4>
+<pre><code>def resolve_session(user_id):
+    k = f"sess:{user_id}"
+    try:
+        uuid = _redis.get(k)
+    except RedisError:
+        <span class="c-a">return None</span>   <span class="c-m"># ⚠️ 여기서 pop 하면 장애 시 풀이 순식간에 고갈된다</span>
+    if not uuid:
+        uuid = pop_from_queue()          <span class="c-m"># TTL 만료 또는 최초</span>
+        _redis.setex(k, 780, uuid)
+    else:
+        _redis.expire(k, 780)            <span class="c-m"># 슬라이딩 — 쓸 때마다 갱신</span>
+    return uuid</code></pre>
+
+<div class="grid">
+  <div class="box w2">
+    <h5>장점</h5>
+    <ul>
+      <li><b>게임 클라이언트 수정 불필요</b> ⭐</li>
+      <li><b>시간 비교 코드 없음</b> — TTL이 판단</li>
+      <li>uuid 위조 불가 (서버만 앎)</li>
+      <li>서버만 고쳐서 배포 가능</li>
+      <li>세션 스토어를 이미 쓰고 있다면 필드 하나 추가</li>
+    </ul>
+  </div>
+  <div class="box w2">
+    <h5>단점 / 리스크</h5>
+    <ul>
+      <li>조회 지연 ~1ms 추가</li>
+      <li><b>Redis 장애가 세션 라우팅에 전파</b> ⚠️</li>
+      <li>현재 겪고 있는 커넥션 이슈가 이 경로에 들어옴</li>
+      <li>멀티 디바이스 시 세션 공유 (의도한 동작일 수 있음)</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note bad">
+  <b>폴백 정책이 핵심입니다</b>
+  Redis 조회 실패 시 <b>큐에서 pop하면 안 됩니다.</b> 장애가 나면 전 유저가 MISS 처리되어
+  풀이 순식간에 고갈되고 <b>전면 콜드스타트</b>가 됩니다. fail-open 구조라면 조용히 그렇게 됩니다.
+  <br><br>
+  Redis 장애 시엔 <b>기존 uuid 재사용 또는 그냥 새 uuid 생성(콜드스타트 감수)</b>이 맞습니다.
+  일부가 1,328ms를 먹는 게 전체가 먹는 것보다 낫습니다.
+</div>
+
+<div class="note warn">
+  <b>대안 — DynamoDB TTL</b>
+  Redis 커넥션 문제(좀비 커넥션 / 복제 지연 / 풀 고갈)가 해결되지 않은 상태라면
+  DynamoDB가 안전합니다. 세션 라우팅이 Redis 장애와 분리됩니다.
+  <br>단 <b>DDB TTL은 삭제가 최대 48시간까지 지연</b>되므로 <code>ttl</code> 값을
+  직접 비교해야 합니다 → <b>시간 비교 코드가 부활</b>합니다.
+</div>
+</section>
+
+<!-- ─────────────────────────── 5 ─────────────────────────── -->
+<section class="card" id="hb">
+<h2><span class="n">5</span>Heartbeat — 재고 유지</h2>
+<p class="lede">
+<b>큐에 있는 세션도 15분 후 죽습니다.</b> AgentCore는 그 세션이 웜풀용인지 모르고,
+호출이 없으면 idle timeout을 적용합니다.
+</p>
+
+<pre class="d">   SQS:  [uuid-1] [uuid-2] [uuid-3] [uuid-4]
+          <span class="c-g">살아있음</span>   <span class="c-g">살아있음</span>   <span class="c-m">죽음</span>     <span class="c-m">죽음</span>      ← 큐만 보면 구분 불가
+
+   죽은 uuid 를 pop 해서 쓰면 ──▶ <span class="c-a">콜드스타트 1,328ms</span>  (에러는 아님, HTTP 200)</pre>
+
+<h4>두 가지 대응</h4>
+<table>
+<thead><tr><th>방법</th><th>동작</th><th>비용</th></tr></thead>
+<tbody>
+<tr><td><b>Heartbeat</b><br><span class="src">원문 권고</span></td>
+    <td>12~13분마다 재고 전체에 <code>{"type":"warmup"}</code> 핑 → idle 타이머 리셋</td>
+    <td>재고 214개 기준 <b>0.3 TPS</b><br>데이터플레인 1,000 TPS 대비 무시 가능</td></tr>
+<tr><td><b>TTL 폐기</b></td>
+    <td>큐 메시지에 적재 시각 기록 → 13분 지난 건 버리고 새로 채움</td>
+    <td>재생성 <b>0.27 TPS</b><br>세션 생성률 61 TPS 대비 미미</td></tr>
+</tbody>
+</table>
+
+<div class="note good">
+  <b>실제로는 거의 발동하지 않습니다</b>
+  재고 소비 61/s면 214개가 <b>약 3.5초에 한 바퀴 회전</b>합니다. 피크 시간엔 만료될 틈이 없습니다.
+  <br><br>
+  <b>문제는 저트래픽 시간대(새벽)입니다.</b> 재고가 그대로 앉아 있다가 전부 죽고,
+  아침 첫 유저들이 콜드스타트를 맞습니다. → <b>heartbeat는 이 구간용 안전망입니다.</b>
+  그 시간대엔 재고를 줄여도 되므로(원문도 오프피크 축소 권고) heartbeat 부담도 함께 내려갑니다.
+</div>
+
+<div class="note warn">
+  <b>원문에서의 위치 — 참고</b>
+  원문(<i>Minimizing startup latency with Amazon Bedrock AgentCore Runtime</i>)의
+  아키텍처 <b>4개 구성요소에 heartbeat는 없습니다.</b>
+  "프로덕션 구현에 일반적으로 추가된다"는 목록에 <b>이름만 한 줄</b> 올라가 있고,
+  주기·구현은 제시되지 않습니다. <b>12~13분은 idle 15분에서 역산한 값입니다.</b>
+  <br><br>
+  또한 <b>"팔려나간 세션이 15분 후 죽는 케이스"는 원문에 아예 없습니다</b> —
+  원문 전제가 "유저 상호작용에 의존하지 않는 워크로드"이기 때문입니다.
+  §6의 시나리오 2·3은 이 문서에서 설계한 부분입니다.
+</div>
+
+<h4>8시간 rolling replacement</h4>
+<pre class="d">microVM <span class="c-a">maxLifetime 상한 = 8시간</span> (연장 불가. Instances 컴퓨트 타입만 14일)
+
+heartbeat 로 살려도 8시간이면 강제 종료
+  ──▶ 적재 시각 기준 <b>7시간대에 선제 교체</b> 필요</pre>
+<div class="src">
+  ※ 이전에 CloudFormation 스펙의 <code>Maximum: 1209600</code>(14일)을 근거로 microVM도 14일
+  가능하다고 안내한 바 있으나, 그것은 <b>Instances 컴퓨트 타입 전용</b>입니다. microVM은 8시간입니다.
+</div>
+</section>
+
+<!-- ─────────────────────────── 6 ─────────────────────────── -->
+<section class="card" id="sc">
+<h2><span class="n">6</span>시나리오별 동작</h2>
+<p class="lede">방식 2(Redis TTL) 기준입니다. <b>모든 정상 시나리오에서 콜드스타트가 0입니다.</b></p>
+
+<ol class="steps">
+<li><b>대화 첫 시작</b><br>
+  Redis MISS → SQS pop → <code>setex(780)</code> → 인보크
+  <span class="lat f">101ms</span></li>
+
+<li><b>15분 내 연속 질문</b><br>
+  Redis HIT → 같은 uuid → warm microVM 재사용 → <code>expire</code> 갱신
+  <span class="lat f">101ms</span> · 큐 소비 0</li>
+
+<li><b>창 열어둔 채 15분 후 질문</b> <span class="tag t-i">원문에 없는 케이스</span><br>
+  microVM은 죽었지만 창 상태와 무관 → Redis TTL도 만료 → MISS → SQS pop
+  <span class="lat f">101ms</span></li>
+
+<li><b>창 닫고 재방문</b><br>
+  닫을 때 <code>redis.del</code> + <code>StopRuntimeSession</code> → MISS → SQS pop
+  <span class="lat f">101ms</span></li>
+
+<li><b>창 닫기</b><br>
+  <code>StopRuntimeSession</code>(약 8초, fire-and-forget) → <b>유휴 15분 꼬리 반납</b></li>
+
+<li><b>큐가 비었을 때</b> <span class="tag t-w">degradation</span><br>
+  새 uuid 그냥 생성 → 그 자리에서 부팅
+  <span class="lat s">1,328ms</span> — 에러는 아님(HTTP 200)</li>
+
+<li><b>죽은 uuid를 pop한 경우</b><br>
+  heartbeat 누락분 → 새 microVM 자동 생성
+  <span class="lat s">1,328ms</span> — 에러는 아님</li>
+
+<li><b>Redis 장애</b><br>
+  폴백: 기존 uuid 또는 새 uuid <span class="lat s">1,328ms</span><br>
+  <b>절대 pop하지 말 것</b> — 풀 고갈로 전면 콜드스타트</li>
+</ol>
+
+<div class="note good">
+  <b>시나리오 1·3·4가 같은 코드 한 줄로 처리됩니다</b>
+  <code>uuid = redis.get(k) or pop_and_store(k)</code>
+  <br>"만료됐는지"를 조회할 API가 없지만(런타임 세션 상태 조회 API 부재), TTL이 대신 판단하므로
+  알 필요가 없습니다.
+</div>
+
+<h3>죽은 uuid로 호출하면? — 실측</h3>
+<pre class="d">1) 최초 호출        HTTP 200  1373ms  served=1   ← microVM 생성
+2) 같은 uuid 재호출  HTTP 200   139ms  served=2   ← 재사용
+   StopRuntimeSession 실행 (= 15분 만료와 동일 상태)
+3) 죽은 uuid 로 호출 HTTP 200  <span class="c-a">1453ms</span>  served=1   ← 새 microVM, <b>같은 uuid</b></pre>
+<p style="font-size:13.5px;margin-top:10px">
+<b>uuid는 내가 정한 문자열이라 소멸하지 않습니다.</b> microVM만 죽고 이름표는 남아,
+다시 부르면 새 microVM이 붙습니다. <b>에러가 없으니 실패 처리 로직은 불필요하지만,
+콜드스타트는 그대로 발생합니다.</b> 그래서 큐에서 새로 꺼내는 것입니다.
+</p>
+
+<h3>부수 효과 — 동시 세션 4.3배 감소</h3>
+<pre class="d">현재:  61/s × 19.5분 (사용 4.5분 + 유휴 15분) = <span class="c-a">71,500</span> 세션
+       └─ 약 77% 가 유저가 이미 떠난 빈 세션
+
+StopRuntimeSession 적용:
+       61/s × 4.5분                            = <span class="c-g">16,500</span> 세션</pre>
+<div class="note warn">
+  <b>단, 닫기 이벤트는 안 오는 경우가 많습니다</b>
+  X 버튼은 잡히지만 <b>앱 강제 종료·크래시·네트워크 끊김·게임 클라이언트 종료는 안 옵니다.</b>
+  게임 클라이언트 내부라 <code>beforeunload</code>류도 신뢰할 수 없습니다.
+  <b>실제 절감률 = 닫기 이벤트 포착률</b>이고, 못 받으면 기존처럼 15분 후 자동 종료되므로
+  손해는 없습니다.
+  <br><br>
+  <b>이것이 EC2 800대 확보 압박을 줄이는 가장 큰 레버입니다</b> — 웜풀과 별개로 즉시 유효합니다.
+</div>
+</section>
+
+<!-- ─────────────────────────── 7 ─────────────────────────── -->
+<section class="card" id="size">
+<h2><span class="n">7</span>풀 크기 산정</h2>
+<p class="lede">원문 공식: <b>필요 풀 = 초당 요청 × 보충 시간</b></p>
+
+<pre class="d">원문 예시:  초당 10 요청 × 보충 3초  = 40개면 콜드스타트 완전 제거
+
+이 워크로드:
+   동시 세션 71,500 ÷ 세션 수명 19.5분 = <b>61 TPS</b>  (세션 생성률)
+   보충 시간 ≈ <b>3.5초</b>  ← 실측 즉석 부팅 시간을 대용값으로 사용
+
+   필요 풀 = 61 × 3.5 ≈ <span class="c-a">214개</span></pre>
+
+<table>
+<thead><tr><th>비교</th><th>규모</th><th>비고</th></tr></thead>
+<tbody>
+<tr><td>AWS 관리형 풀 (엔드포인트 1개)</td><td><b>10개</b></td><td>실측. 조정 불가</td></tr>
+<tr><td>엔드포인트 10개 최대 활용</td><td>100개</td><td><code>L-9B442722</code> 기본값 10. <b>여전히 부족</b></td></tr>
+<tr><td><b>필요량</b></td><td><b>214개+</b></td><td>자체 풀 필수</td></tr>
+</tbody>
+</table>
+
+<div class="note warn">
+  <b>214개는 하한입니다</b>
+  이 값은 <b>신규 진입만</b> 계산한 것입니다. 시나리오 3·4(15분 만료 후 재방문)도 큐를 소비하므로
+  <b>재방문 빈도만큼 커집니다.</b> 정확한 산정에는 <b>고객의 재방문 패턴 데이터가 필요합니다.</b>
+</div>
+
+<h4>연동 쿼터</h4>
+<table>
+<thead><tr><th>쿼터</th><th>코드</th><th>기본</th><th>필요</th></tr></thead>
+<tbody>
+<tr><td>세션 생성률</td><td class="k">L-8EE2AEA2</td><td>25 TPS</td><td><b>61+ TPS</b> — 보충 속도가 여기 종속</td></tr>
+<tr><td>동시 활성 세션</td><td class="k">L-3E5722B2</td><td>2,500</td><td><b>풀 재고도 차감</b>. StopRuntimeSession 으로 완화</td></tr>
+<tr><td>데이터플레인</td><td class="k">L-46ED137C</td><td>1,000 TPS</td><td>heartbeat·stop 포함해도 여유</td></tr>
+<tr><td>Endpoints per Agent</td><td class="k">L-9B442722</td><td>10</td><td>관리형 풀 배수에만 영향</td></tr>
+</tbody>
+</table>
+<div class="note">
+  <b>세션 생성 쿼터는 통합되었습니다 (2026-08)</b>
+  컨테이너 400 TPM / 직접 코드 25 TPS 였던 것이 <b>계정당 25 TPS 단일 쿼터</b>로 합쳐졌습니다.
+  릴리즈 노트 원문: <i>"unifies and replaces the previous per-endpoint limits"</i>.
+  실측에서도 서울 리전에 세션 생성 쿼터는 <code>L-8EE2AEA2</code> 하나뿐이며
+  <code>QuotaAppliedAtLevel: ACCOUNT</code>, 메트릭이 <code>CombinedNewSessionCreation</code>입니다.
+  <b>배포 방식·엔드포인트 수와 무관합니다.</b>
+</div>
+</section>
+
+<!-- ─────────────────────────── 8 ─────────────────────────── -->
+<section class="card" id="risk">
+<h2><span class="n">8</span>리스크와 미확인 사항</h2>
+
+<h3>방식 선택</h3>
+<table>
+<thead><tr><th></th><th>방식 1 (클라이언트 타이머)</th><th>방식 2 (Redis TTL)</th></tr></thead>
+<tbody>
+<tr><td>추가 인프라</td><td><span class="tag t-ok">없음</span></td><td>기존 Redis</td></tr>
+<tr><td>클라이언트 수정</td><td><span class="tag t-no">필요</span></td><td><span class="tag t-ok">불필요</span></td></tr>
+<tr><td>시간 비교 코드</td><td>있음</td><td><span class="tag t-ok">없음</span></td></tr>
+<tr><td>uuid 위조 방지</td><td><span class="tag t-no">취약</span></td><td><span class="tag t-ok">안전</span></td></tr>
+<tr><td>외부 장애 전파</td><td><span class="tag t-ok">없음</span></td><td><span class="tag t-w">Redis 의존</span></td></tr>
+<tr><td>조회 지연</td><td>0</td><td>~1ms</td></tr>
+</tbody>
+</table>
+
+<div class="note good">
+  <b>권고: 방식 2</b>
+  게임 클라이언트를 고치지 않고 서버만 배포해 적용할 수 있는 점이 결정적입니다. 런치까지
+  일정이 촉박한 상황에서 클라이언트 배포 주기에 묶이지 않는 것이 큽니다.
+  <br><br>
+  <b>단 Redis 커넥션 이슈(좀비 / 복제 지연 / 풀 고갈)가 미해결이라면 DynamoDB 로 시작</b>하고,
+  Redis 안정화 후 이전하는 것이 안전합니다.
+</div>
+
+<h3>미확인 — 아래는 추정이며 실측이 아닙니다</h3>
+<table>
+<thead><tr><th>#</th><th>항목</th><th>영향</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><b>보충 속도</b> (초당 몇 개 채워지나)</td>
+    <td>214개 계산의 <b>3.5초는 부팅 시간 대용값</b>. 실제 보충률이 낮으면 풀이 더 커야 함</td></tr>
+<tr><td>2</td><td><b>재방문 빈도</b></td>
+    <td>시나리오 3·4의 큐 소비량 → <b>풀 크기 직접 결정</b></td></tr>
+<tr><td>3</td><td>챗봇 UI 오픈 → 첫 질문 간격</td>
+    <td>핑 방식(큐 없이)만으로 충분한지 판단 근거</td></tr>
+<tr><td>4</td><td>닫기 이벤트 포착률</td>
+    <td>동시 세션 절감 실효치</td></tr>
+<tr><td>5</td><td>61 TPS <b>지속</b> 부하에서의 거동</td>
+    <td>실측은 버스트 1회뿐 — <b>원문 측정 원칙 5번 미충족</b></td></tr>
+<tr><td>6</td><td>고객 콜드스타트 7~10초의 원인</td>
+    <td>AWS 엔지니어 조사 중. 1.2KB zip이 1,328ms이므로 <b>초기화 코드 문제로 추정</b></td></tr>
+</tbody>
+</table>
+
+<h3>더 단순한 대안 — 핑 방식</h3>
+<div class="note">
+  <b>큐·heartbeat 없이 되는 방법도 있습니다</b>
+  원문 완화 사다리의 <b>1순위는 큐가 아니라 "전략적 핑"</b>입니다(큐는 3순위).
+  <br><br>
+  유저가 챗봇 UI를 <b>열 때</b> 그 유저의 uuid로 warmup 핑을 쏘고, 타이핑하는 동안
+  프로비저닝이 끝나게 하는 방식입니다. 재방문도 "다시 여는" 것이므로 같은 방법으로 커버됩니다.
+  <b>SQS·Lambda·heartbeat·풀 크기 산정이 전부 불필요합니다.</b>
+  <br><br>
+  <b>성립 조건: UI 오픈 → 첫 질문 간격이 콜드스타트(1,328ms)보다 길어야 합니다.</b>
+  보통 타이핑에 수 초가 걸리므로 충분할 가능성이 높습니다 → 미확인 #3.
+  <br><br>
+  ⚠️ 예열 시점은 <b>반드시 챗봇 UI 오픈</b>이어야 합니다. 게임 로그인 시점에 하면
+  <b>챗봇을 쓰지 않는 유저 몫까지 세션을 만들어</b> 사용률 20% 가정 시 5배를 낭비합니다.
+</div>
+
+<h3>실행 우선순위</h3>
+<ol class="steps">
+<li><b>콜드스타트를 클라이언트에서 계측</b><br>
+  CloudWatch에 콜드스타트 전용 메트릭이 없습니다. <code>Latency</code>는 LLM 시간까지 포함한
+  end-to-end라 분리 불가 → <b>개선 효과를 증명할 수단부터 확보</b></li>
+<li><b>초기화 코드 점검</b><br>
+  의존성 번들 여부, 모듈 스코프 무거운 import → 7~10초의 실제 원인일 가능성이 높음</li>
+<li><b>Memory sessionId 분리 확인</b><br>
+  <code>create_event(sessionId=...)</code>에 <code>runtime_session_id</code>가 들어가 있으면
+  웜풀 자체가 성립하지 않음</li>
+<li><b>StopRuntimeSession 적용</b><br>
+  웜풀과 무관하게 즉시 유효. 동시 세션·EC2 압박 완화</li>
+<li><b>쿼터 증설</b> — <code>L-8EE2AEA2</code> + <code>L-3E5722B2</code> 세트</li>
+<li><b>핑 방식 먼저 시도</b> → 부족하면 SQS 웜풀</li>
+</ol>
+</section>
+
+<!-- ── 실배포 검증 결과 ── -->
+<section class="card" id="live">
+<h2><span class="n">9</span>실배포 검증 결과 <span class="tag t-ok" style="font-size:12px">2026-09-14</span></h2>
+<p class="lede">
+이 문서의 설계를 <b>실제로 AWS에 배포해 두 방식 모두 동작을 확인</b>했습니다.
+아래는 실행 로그에서 그대로 옮긴 값입니다. 데모 코드는
+<a href="https://github.com/blait/AgentCoreWarmPool">github.com/blait/AgentCoreWarmPool</a>
+에 있습니다.
+</p>
+
+<h3>방식 2 (저장소 TTL) — 연속 질문</h3>
+<pre class="d">질문1:  117.9ms  source=pool     cold=False  uptime=8149ms  turn=1  restored=True
+질문2:  104.5ms  source=reused   cold=False  uptime=8392ms  turn=2  restored=False
+질문3:   84.2ms  source=reused   cold=False  uptime=8604ms  turn=3  restored=False</pre>
+<p style="font-size:13.5px">
+<b>uptime 8,149ms</b> — 요청이 도달하기 8초 전에 이미 부팅되어 있던 microVM에 안착했습니다.
+첫 질문이 <code>pool</code>, 이후가 <code>reused</code>로 전환되는 것도 설계대로입니다.
+</p>
+
+<h3>방식 1 (클라이언트 타이머) — 13분 경과 감지</h3>
+<pre class="d">q1:  107.2ms  source=pool     uptime=23995ms
+q2:   95.0ms  source=reused   uptime=24406ms
+lastCallAt 을 900초 과거로 설정 (13분 초과 시뮬레이션)
+→   125.0ms  source=pool     uptime=27346ms   ← 만료를 감지해 큐에서 새로 꺼냄</pre>
+
+<h3>⭐ 풀 소진 — 웜풀이 필요한 이유</h3>
+<pre class="d">재고 2개 상태에서 신규 유저 6명 연속 요청
+
+유저1:   100.4ms  source=pool     <span class="c-g">웜</span>
+유저2:   134.2ms  source=pool     <span class="c-g">웜</span>
+유저3:  1307.7ms  source=fresh    <span class="c-a">콜드</span>  ← 재고 바닥
+유저4:  1296.7ms  source=fresh    <span class="c-a">콜드</span>
+유저5:  1349.7ms  source=fresh    <span class="c-a">콜드</span>
+유저6:  1263.2ms  source=fresh    <span class="c-a">콜드</span></pre>
+<div class="note good">
+  <b>재고가 있는 동안 100~134ms, 바닥나면 1,263~1,350ms</b>
+  후자는 §1의 콜드스타트 실측값 <b>1,328ms</b>와 일치합니다. 같은 코드·같은 런타임에서
+  <b>풀 재고 유무만으로 10배 이상 차이</b>가 난다는 것을 한 번의 실행으로 보여줍니다.
+</div>
+
+<h3>⚠️ 실배포에서 발견한 버그 — heartbeat가 재고를 잠갔다</h3>
+<p style="font-size:13.5px">
+§5에서 heartbeat를 "부담이 작은 안전망"으로 설명했는데, <b>구현에는 함정이 있었습니다.</b>
+</p>
+<pre class="d">heartbeat 실행 → {"pinged": 3, "depth": 3}     ← 성공한 것처럼 보인다
+SQS 상태        → visible=0, invisible=3        ← 그런데 재고 전부가 잠김
+이어진 요청      → 1329.5ms  source=fresh       ← <span class="c-a">전 유저가 콜드스타트</span>
+
+가시성 회복까지 약 40초 소요</pre>
+<p style="font-size:13.5px"><b>원인</b>:
+heartbeat가 재고를 다 훑으려고 <code>receive</code>를 여러 라운드 돌렸는데,
+환원한 메시지가 같은 실행에서 다시 잡히며 <code>VisibilityTimeout</code>이 재적용됐습니다.
+<b>예열된 세션이 살아 있는데도 pop이 빈손이 되어, 웜풀의 목적 자체가 무너지는 버그입니다.</b>
+</p>
+<p style="font-size:13.5px"><b>수정</b>:
+receive를 <b>1회(최대 10건)로 제한</b>. 처리한 메시지는 전부 delete되므로 재고가 잠기지 않습니다.
+재고가 10개를 넘으면 함수를 여러 번 호출합니다.
+</p>
+<pre class="d">수정 후:
+heartbeat → {"pinged": 7, "depth": 7}   ·  SQS: visible=7, invisible=0
+직후 요청1:  95.5ms  source=pool  <span class="c-g">웜</span>
+직후 요청2: 103.7ms  source=pool  <span class="c-g">웜</span></pre>
+<div class="note warn">
+  <b>이 버그가 시사하는 것</b>
+  원문에 heartbeat는 "필요하다"는 한 줄로만 있고 구현이 없습니다(§5 참조).
+  실제로 구현해보면 <b>SQS 가시성 관리가 웜풀 운영의 핵심 난점</b>이고, 잘못하면
+  풀을 운영하는데도 전 유저가 콜드스타트를 맞습니다.
+  <b>운영 전에 "heartbeat 직후 pop이 웜인가"를 반드시 검증해야 합니다.</b>
+</div>
+
+<h3>검증한 항목</h3>
+<table>
+<thead><tr><th>항목</th><th>결과</th></tr></thead>
+<tbody>
+<tr><td>방식 2 — pool → reused 전환</td><td><span class="tag t-ok">확인</span> 117.9 → 104.5 → 84.2ms</td></tr>
+<tr><td>방식 1 — 13분 초과 감지 후 교체</td><td><span class="tag t-ok">확인</span> source=pool, 125ms</td></tr>
+<tr><td>풀 소진 시 fresh 폴백</td><td><span class="tag t-ok">확인</span> 1,263~1,350ms</td></tr>
+<tr><td>heartbeat 후 재고 사용 가능</td><td><span class="tag t-ok">수정 후 확인</span> visible=7</td></tr>
+<tr><td>StopRuntimeSession → 재질문</td><td><span class="tag t-ok">확인</span> 세션 교체됨</td></tr>
+<tr><td>CloudFront → API GW → Lambda → Runtime</td><td><span class="tag t-ok">확인</span> 158ms</td></tr>
+<tr><td>warmup 센티널이 LLM 우회</td><td><span class="tag t-ok">확인</span> 예열 1,489ms를 흡수</td></tr>
+<tr><td>보충 속도 (초당 몇 개)</td><td><span class="tag t-w">미측정</span> §8-1 그대로</td></tr>
+<tr><td>61 TPS 지속 부하</td><td><span class="tag t-w">미측정</span> §8-5 그대로</td></tr>
+</tbody>
+</table>
+</section>
+
+<footer>
+  원문: <a href="https://repost.aws/articles/ARCJIn3t7aRC2FxiRTV1SuCA/minimizing-startup-latency-with-amazon-bedrock-agentcore-runtime">Minimizing startup latency with Amazon Bedrock AgentCore Runtime</a>
+  (AWS re:Post, 2026-05-06) · 상세 번역 <code>agentcore-startup-latency-ko.md</code> ·
+  실측 결과 <code>agentcore-coldstart-test-result.md</code>
+  <br>실측: 2026-09-10, ap-northeast-2 · 문서 작성: 2026-09-11
+  <br><br>
+  <b>수치 출처 구분</b> — 101ms / 1,328ms / 379ms / 3,337ms / 풀 10개 / idle 최소 60초 /
+  죽은 uuid HTTP 200 은 <b>직접 실측</b>입니다.
+  214개 / 61 TPS / 71,500 / 16,500 은 <b>고객 파라미터 기반 계산값</b>이며,
+  보충 시간 3.5초는 <b>부팅 시간 대용 추정값</b>입니다.
+</footer>
+
+</div>
+</body>
+</html>

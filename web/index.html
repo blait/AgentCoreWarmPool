@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCore Runtime 웜풀 데모</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --line:#30363d;
+  --ink:#e6edf3; --muted:#8b949e;
+  --warm:#3fb950; --warm-bg:#0d2818; --cold:#f85149; --cold-bg:#2d1215;
+  --blue:#58a6ff; --amber:#d29922; --purple:#a371f7;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.65 system-ui,-apple-system,"Segoe UI","Noto Sans KR",sans-serif}
+.wrap{max-width:1220px;margin:0 auto;padding:20px 18px 60px}
+
+header{border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:20px}
+h1{margin:0 0 6px;font-size:20px}
+.sub{color:var(--muted);font-size:13px}
+.facts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.fact{font-size:11.5px;padding:4px 10px;border-radius:5px;background:var(--panel);
+  border:1px solid var(--line);color:var(--muted)}
+.fact b{color:var(--ink)}
+
+.cols{display:grid;grid-template-columns:1fr 400px;gap:18px}
+@media(max-width:1000px){.cols{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin-bottom:16px}
+h2{margin:0 0 4px;font-size:15px}
+h2 .hint{font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+h3{margin:16px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px}
+
+/* 모드 토글 */
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.mode{border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer;
+  background:var(--panel2);transition:.12s}
+.mode:hover{border-color:var(--muted)}
+.mode.on{border-color:var(--blue);background:#0d2440}
+.mode .t{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:6px}
+.mode .d{color:var(--muted);font-size:11.5px;margin-top:5px;line-height:1.5}
+.mode .r{display:inline-block;font-size:10px;padding:1px 6px;border-radius:3px;
+  background:var(--warm-bg);color:var(--warm);border:1px solid #1d572f}
+.mode code{font-family:var(--mono);font-size:10.5px;background:#0d1117;
+  padding:1px 4px;border-radius:3px;color:var(--amber)}
+
+/* 채팅 */
+#log{display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;
+  margin:12px 0;padding-right:4px}
+.msg{padding:10px 13px;border-radius:8px;border:1px solid var(--line);font-size:13px}
+.me{background:#1f2937;align-self:flex-end;max-width:80%}
+.bot{background:var(--panel2)}
+.bot.cold{border-left:3px solid var(--cold)}
+.bot.warm{border-left:3px solid var(--warm)}
+.badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;padding-top:9px;
+  border-top:1px solid var(--line)}
+.bg{font-size:10.5px;padding:2px 7px;border-radius:4px;background:#0d1117;
+  border:1px solid var(--line);color:var(--muted);font-family:var(--mono)}
+.bg.lat-w{background:var(--warm-bg);color:var(--warm);border-color:#1d572f;font-weight:700}
+.bg.lat-c{background:var(--cold-bg);color:var(--cold);border-color:#5c2225;font-weight:700}
+.bg.src-pool{color:var(--warm);border-color:#1d572f}
+.bg.src-reused{color:var(--blue);border-color:#1f4a7a}
+.bg.src-fresh{color:var(--cold);border-color:#5c2225}
+
+form{display:flex;gap:8px;margin-top:4px}
+input[type=text]{flex:1;padding:10px 12px;border-radius:7px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--ink);font-size:13.5px;font-family:inherit}
+input:focus{outline:none;border-color:var(--blue)}
+button{padding:10px 16px;border:1px solid var(--line);border-radius:7px;
+  background:var(--panel2);color:var(--ink);font-size:13px;cursor:pointer;
+  font-family:inherit;transition:.12s}
+button:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.pri{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+button.pri:hover:not(:disabled){background:#388bfd;color:#fff}
+
+/* 풀 시각화 */
+.gauge{height:7px;background:#0d1117;border-radius:4px;overflow:hidden;margin:10px 0 4px;
+  border:1px solid var(--line)}
+.gauge i{display:block;height:100%;background:var(--warm);transition:width .3s}
+.gmeta{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted)}
+.slots{display:flex;gap:5px;flex-wrap:wrap;margin:12px 0;min-height:44px}
+.slot{border:1px solid #1d572f;background:var(--warm-bg);border-radius:5px;
+  padding:5px 7px;font-family:var(--mono);font-size:10px;text-align:center;min-width:62px}
+.slot.stale{border-color:#6b5011;background:#2a2008}
+.slot .u{color:var(--warm);font-weight:700}
+.slot.stale .u{color:var(--amber)}
+.slot .a{color:var(--muted);font-size:9.5px;margin-top:2px}
+.empty{color:var(--muted);font-size:12px;padding:12px 0;text-align:center;
+  border:1px dashed var(--line);border-radius:6px;width:100%}
+
+.btns{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
+.btns button{flex:1;min-width:110px;font-size:12px;padding:8px 10px}
+
+/* 시나리오 */
+.sc{border:1px solid var(--line);border-radius:7px;padding:11px 13px;margin-bottom:8px;
+  background:var(--panel2)}
+.sc .h{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.sc .n{font-size:12.5px;font-weight:600}
+.sc .w{color:var(--muted);font-size:11px;margin-top:5px;line-height:1.5}
+.sc button{font-size:11.5px;padding:6px 12px;white-space:nowrap}
+
+/* 차트 */
+.chart{margin-top:8px}
+.chart svg{width:100%;height:auto;display:block}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;
+  vertical-align:-1px}
+
+.note{font-size:11.5px;color:var(--muted);background:var(--panel2);
+  border-left:2px solid var(--line);padding:9px 12px;border-radius:0 5px 5px 0;margin-top:12px;
+  line-height:1.6}
+.note.warn{border-left-color:var(--amber)}
+.err{color:var(--cold);font-size:12.5px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
+  border-top-color:var(--blue);border-radius:50%;animation:r .7s linear infinite;
+  vertical-align:-1px;margin-right:6px}
+@keyframes r{to{transform:rotate(360deg)}}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+td.n{font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>AgentCore Runtime 웜풀 데모</h1>
+  <div class="sub">
+    콜드스타트를 세션 재사용으로 제거하는 두 방식을 실제로 호출해 비교합니다.
+    표시되는 지연은 매 호출의 실측값입니다.
+  </div>
+  <div class="facts">
+    <span class="fact">콜드 p50 <b>1,328ms</b></span>
+    <span class="fact">웜 p50 <b>101ms</b></span>
+    <span class="fact">차이 <b>13배</b></span>
+    <span class="fact">AWS 관리형 풀 <b>10개</b></span>
+    <span class="fact">idle 최소 <b>60초</b></span>
+  </div>
+</header>
+
+<div class="cols">
+<!-- ═════════ 좌측 ═════════ -->
+<div>
+  <div class="card">
+    <h2>세션 관리 방식 <span class="hint">선택에 따라 요청 바디가 달라집니다</span></h2>
+    <div class="modes">
+      <div class="mode on" id="m-store" data-mode="store">
+        <div class="t">방식 2 · 저장소 TTL <span class="r">추천</span></div>
+        <div class="d">
+          서버가 세션을 기억합니다. 만료 판단을 <b>TTL 780초</b>가 대신하므로
+          시간 비교 코드가 없습니다.<br>
+          요청 → <code>{userId, prompt}</code> · 클라이언트는 uuid를 모릅니다
+        </div>
+      </div>
+      <div class="mode" id="m-client" data-mode="client">
+        <div class="t">방식 1 · 클라이언트 타이머</div>
+        <div class="d">
+          브라우저가 uuid와 마지막 호출 시각을 보관하고 <b>13분 경과를 직접 계산</b>합니다.
+          추가 인프라가 없는 대신 uuid 위조가 가능합니다.<br>
+          요청 → <code>{userId, prompt, sessionId, lastCallAt}</code>
+        </div>
+      </div>
+    </div>
+    <div class="note" id="modeNote"></div>
+  </div>
+
+  <div class="card">
+    <h2>대화 <span class="hint">응답 배지에서 콜드/웜을 확인하세요</span></h2>
+    <div id="log"></div>
+    <form id="f">
+      <input type="text" id="q" placeholder="질문을 입력하세요" autocomplete="off" required>
+      <button class="pri" id="send" type="submit">전송</button>
+    </form>
+    <div class="btns">
+      <button id="btnEnd">세션 종료 (StopRuntimeSession)</button>
+      <button id="btnClear">기록 지우기</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>시나리오 <span class="hint">원클릭 재현</span></h2>
+
+    <div class="sc"><div class="h">
+      <div><div class="n">① 연속 질문 3회</div>
+        <div class="w">같은 세션을 재사용합니다. 첫 질문만 <b>pool</b>, 이후는 <b>reused</b>가 되고
+          전부 웜이어야 합니다.</div></div>
+      <button data-sc="seq">실행</button></div></div>
+
+    <div class="sc"><div class="h">
+      <div><div class="n">② 세션 종료 후 재질문</div>
+        <div class="w">microVM을 강제 종료해 15분 만료를 시뮬레이션합니다.
+          풀에 재고가 있으면 <b>pool</b>로 다시 웜, 없으면 <b>fresh</b>로 콜드가 됩니다.</div></div>
+      <button data-sc="end">실행</button></div></div>
+
+    <div class="sc"><div class="h">
+      <div><div class="n">③ 풀 소진시키기</div>
+        <div class="w">신규 유저를 연달아 만들어 재고를 다 씁니다.
+          재고가 있는 동안 <b>pool</b>(웜), 바닥나면 <b>fresh</b>(콜드)로 <b>지연이 급등</b>합니다.
+          웜풀이 왜 필요한지 보여주는 핵심 시나리오입니다.</div></div>
+      <button data-sc="drain">실행</button></div></div>
+
+    <div class="sc"><div class="h">
+      <div><div class="n">④ 두 방식 A/B 비교</div>
+        <div class="w">같은 질문을 두 방식으로 각각 던져 지연을 나란히 봅니다.
+          <b>결과는 비슷해야 정상입니다</b> — 두 방식의 차이는 지연이 아니라
+          운영 특성(클라이언트 수정 여부·위조 가능성)에 있습니다.</div></div>
+      <button data-sc="ab">실행</button></div></div>
+
+    <div id="scOut"></div>
+  </div>
+</div>
+
+<!-- ═════════ 우측 ═════════ -->
+<div>
+  <div class="card">
+    <h2>웜풀 재고 <span class="hint">3초마다 갱신</span></h2>
+    <div class="gauge"><i id="gfill" style="width:0%"></i></div>
+    <div class="gmeta"><span id="gtxt">-</span><span id="gtgt"></span></div>
+    <div class="slots" id="slots"></div>
+    <div class="btns">
+      <button id="btnRefill">재고 보충</button>
+      <button id="btnHb">heartbeat 실행</button>
+    </div>
+    <div class="note warn">
+      큐에 uuid가 있다는 것이 <b>살아있다는 보장은 아닙니다.</b>
+      15분간 호출이 없으면 microVM만 죽고 uuid 껍데기가 남습니다.
+      heartbeat가 그것을 막습니다.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>지연 비교 <span class="hint">최근 호출</span></h2>
+    <div class="chart" id="chart"></div>
+    <div class="legend">
+      <span><i style="background:var(--warm)"></i>웜 (pool/reused)</span>
+      <span><i style="background:var(--cold)"></i>콜드 (fresh)</span>
+      <span><i style="background:var(--muted)"></i>1,328ms 기준선</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>집계</h2>
+    <table id="stats"><tbody></tbody></table>
+    <div class="note">
+      <b>source</b> — <code>pool</code> 큐에서 꺼낸 예열 세션 ·
+      <code>reused</code> 기존 세션 재사용 ·
+      <code>fresh</code> 즉석 생성(콜드)
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+'use strict';
+const API = '/api';
+const S = {
+  mode: 'store',
+  userId: 'demo-' + Math.random().toString(36).slice(2, 8),
+  calls: [],            // {latencyMs, source, coldStart, mode}
+  client: { sessionId: null, lastCallAt: 0 },   // 방식 1 전용 로컬 상태
+};
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// localStorage 로 방식 1 상태를 보존한다(새로고침해도 세션 유지 — 그게 방식 1의 특성)
+try {
+  const raw = localStorage.getItem('acwp.client');
+  if (raw) S.client = JSON.parse(raw);
+} catch (e) { /* 무시 */ }
+const saveClient = () => {
+  try { localStorage.setItem('acwp.client', JSON.stringify(S.client)); } catch (e) {}
+};
+
+async function api(path, body) {
+  const res = await fetch(API + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const j = await res.json().catch(() => ({ error: 'invalid response' }));
+  if (!res.ok && !j.error) j.error = 'HTTP ' + res.status;
+  return j;
+}
+
+// ── 모드 ────────────────────────────────────────────────────────────────
+function setMode(m) {
+  S.mode = m;
+  $('#m-store').classList.toggle('on', m === 'store');
+  $('#m-client').classList.toggle('on', m === 'client');
+  renderModeNote();
+}
+function renderModeNote() {
+  const n = $('#modeNote');
+  if (S.mode === 'store') {
+    n.innerHTML = '지금 보내는 것: <code>{ userId, prompt }</code> — '
+      + '만료 판단은 서버의 TTL이 합니다. 브라우저는 세션 ID를 모릅니다.';
+  } else {
+    const age = S.client.lastCallAt
+      ? Math.round(Date.now() / 1000 - S.client.lastCallAt) + '초 전' : '없음';
+    n.innerHTML = '지금 보내는 것: <code>{ userId, prompt, sessionId, lastCallAt }</code><br>'
+      + '브라우저 보관 상태 — sessionId: <code>'
+      + esc(S.client.sessionId ? S.client.sessionId.slice(0, 12) + '…' : '없음')
+      + '</code> · 마지막 호출: <code>' + esc(age) + '</code>'
+      + ' · 13분(780초) 초과 시 브라우저가 새 세션을 요청합니다.';
+  }
+}
+document.querySelectorAll('.mode').forEach(el =>
+  el.addEventListener('click', () => setMode(el.dataset.mode)));
+
+// ── 대화 ────────────────────────────────────────────────────────────────
+function addMe(text) {
+  const d = document.createElement('div');
+  d.className = 'msg me';
+  d.textContent = text;
+  $('#log').appendChild(d);
+  d.scrollIntoView({ block: 'end' });
+}
+function addPending(label) {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  d.innerHTML = '<span class="spin"></span>' + esc(label || '호출 중…');
+  $('#log').appendChild(d);
+  d.scrollIntoView({ block: 'end' });
+  return d;
+}
+function fillBot(el, r) {
+  if (r.error) {
+    el.className = 'msg bot';
+    el.innerHTML = '<span class="err">오류: ' + esc(r.error) + '</span>';
+    return;
+  }
+  const cold = !!r.coldStart;
+  el.className = 'msg bot ' + (cold ? 'cold' : 'warm');
+  const src = r.source || '-';
+  const b = [];
+  b.push('<span class="bg ' + (cold ? 'lat-c' : 'lat-w') + '">'
+    + (r.latencyMs != null ? r.latencyMs + 'ms' : '-') + '</span>');
+  b.push('<span class="bg ' + (src === 'pool' ? 'src-pool'
+    : src === 'reused' ? 'src-reused' : 'src-fresh') + '">source=' + esc(src) + '</span>');
+  b.push('<span class="bg">' + (cold ? '콜드스타트' : '웜') + '</span>');
+  b.push('<span class="bg">uptime ' + (r.uptimeMs != null ? r.uptimeMs + 'ms' : '-') + '</span>');
+  b.push('<span class="bg">vm요청# ' + (r.servedByThisVm ?? '-') + '</span>');
+  b.push('<span class="bg">turn ' + (r.turn ?? '-') + '</span>');
+  if (r.contextRestored) b.push('<span class="bg">이력복원</span>');
+  b.push('<span class="bg">mode=' + esc(r.mode || '-') + '</span>');
+  el.innerHTML = '<div>' + esc(r.answer || '(응답 없음)') + '</div>'
+    + '<div class="badges">' + b.join('') + '</div>';
+  el.scrollIntoView({ block: 'end' });
+}
+
+async function ask(prompt, opts) {
+  const o = opts || {};
+  const mode = o.mode || S.mode;
+  const body = { mode, userId: o.userId || S.userId, prompt };
+
+  // 방식 1: 브라우저가 보관한 상태를 실어 보낸다. 13분 계산도 여기서 한다.
+  if (mode === 'client' && !o.forceNew) {
+    const age = Date.now() / 1000 - (S.client.lastCallAt || 0);
+    if (S.client.sessionId && age <= 780) {
+      body.sessionId = S.client.sessionId;
+      body.lastCallAt = S.client.lastCallAt;
+    }
+    // 780초 초과면 sessionId를 보내지 않는다 → 서버가 풀에서 새로 꺼낸다
+  }
+  if (o.overrideLastCallAt !== undefined && S.client.sessionId) {
+    body.sessionId = S.client.sessionId;
+    body.lastCallAt = o.overrideLastCallAt;
+  }
+
+  const r = await api('/chat', body);
+
+  if (mode === 'client' && r.sessionId) {
+    S.client.sessionId = r.sessionId;
+    S.client.lastCallAt = Math.floor(Date.now() / 1000);
+    saveClient();
+  }
+  if (!r.error) {
+    S.calls.push({ latencyMs: r.latencyMs, source: r.source,
+                   coldStart: !!r.coldStart, mode });
+    if (S.calls.length > 40) S.calls.shift();
+    drawChart(); drawStats();
+  }
+  renderModeNote();
+  return r;
+}
+
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const v = $('#q').value.trim();
+  if (!v) return;
+  $('#q').value = '';
+  $('#send').disabled = true;
+  addMe(v);
+  const p = addPending();
+  try { fillBot(p, await ask(v)); }
+  catch (err) { fillBot(p, { error: err.message }); }
+  finally { $('#send').disabled = false; $('#q').focus(); refreshPool(); }
+});
+
+$('#btnClear').addEventListener('click', () => {
+  $('#log').innerHTML = ''; $('#scOut').innerHTML = '';
+  S.calls = []; drawChart(); drawStats();
+});
+
+$('#btnEnd').addEventListener('click', async () => {
+  const p = addPending('세션 종료 중…');
+  const r = await api('/session/end', { userId: S.userId,
+    sessionId: S.mode === 'client' ? S.client.sessionId : undefined });
+  p.className = 'msg bot';
+  p.innerHTML = r.error ? '<span class="err">' + esc(r.error) + '</span>'
+    : '세션 종료됨 <span class="bg">' + esc((r.sessionId || '').slice(0, 16)) + '…</span>'
+      + ' <span class="bg">stopped=' + r.stopped + '</span>'
+      + '<div class="w" style="color:var(--muted);font-size:11.5px;margin-top:6px">'
+      + 'microVM이 종료되었습니다. 다음 질문은 풀에서 새 세션을 꺼내야 합니다.</div>';
+  S.client.sessionId = null; S.client.lastCallAt = 0; saveClient();
+  renderModeNote(); refreshPool();
+});
+
+// ── 풀 ──────────────────────────────────────────────────────────────────
+async function refreshPool() {
+  const r = await api('/pool').catch(() => null);
+  if (!r || r.error) return;
+  const depth = r.depth ?? 0, target = r.target ?? 0;
+  $('#gfill').style.width = target ? Math.min(100, depth / target * 100) + '%' : '0%';
+  $('#gtxt').textContent = '재고 ' + depth + '개';
+  $('#gtgt').textContent = '목표 ' + target;
+  const el = $('#slots');
+  if (!(r.items || []).length) {
+    el.innerHTML = '<div class="empty">재고 없음 — 지금 질문하면 콜드스타트가 발생합니다</div>';
+    return;
+  }
+  el.innerHTML = r.items.map(it =>
+    '<div class="slot' + (it.staleRisk ? ' stale' : '') + '">'
+    + '<div class="u">' + esc(it.uuid) + '</div>'
+    + '<div class="a">' + (it.ageSec ?? '-') + 's'
+    + (it.staleRisk ? ' ⚠' : '') + '</div></div>').join('');
+}
+$('#btnRefill').addEventListener('click', async e => {
+  e.target.disabled = true; e.target.textContent = '보충 중…';
+  await api('/pool/refill', { count: 3 });
+  e.target.disabled = false; e.target.textContent = '재고 보충';
+  refreshPool();
+});
+$('#btnHb').addEventListener('click', async e => {
+  e.target.disabled = true; e.target.textContent = '실행 중…';
+  const r = await api('/pool/heartbeat', {});
+  e.target.disabled = false; e.target.textContent = 'heartbeat 실행';
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.innerHTML = 'heartbeat — 핑 ' + (r.pinged ?? '-') + '건, 재고 ' + (r.depth ?? '-')
+    + '개. <b>직후에도 pop이 웜이어야 정상입니다.</b>';
+  $('#scOut').prepend(d);
+  refreshPool();
+});
+
+// ── 차트 (인라인 SVG) ───────────────────────────────────────────────────
+function drawChart() {
+  const c = S.calls;
+  const el = $('#chart');
+  if (!c.length) { el.innerHTML = '<div class="empty">호출 기록이 없습니다</div>'; return; }
+  const W = 380, H = 150, pad = { l: 40, r: 8, t: 8, b: 22 };
+  const max = Math.max(1500, ...c.map(x => x.latencyMs || 0)) * 1.1;
+  const iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  const bw = Math.max(3, Math.min(22, iw / c.length - 3));
+  const y = v => pad.t + ih - (v / max) * ih;
+
+  let g = '';
+  // Y축 눈금
+  [0, 500, 1000, 1500].filter(v => v <= max).forEach(v => {
+    g += `<line x1="${pad.l}" y1="${y(v)}" x2="${W - pad.r}" y2="${y(v)}"
+      stroke="#30363d" stroke-width="1"/>
+      <text x="${pad.l - 5}" y="${y(v) + 3.5}" fill="#8b949e" font-size="9"
+      text-anchor="end" font-family="monospace">${v}</text>`;
+  });
+  // 1,328ms 실측 기준선
+  if (1328 <= max) {
+    g += `<line x1="${pad.l}" y1="${y(1328)}" x2="${W - pad.r}" y2="${y(1328)}"
+      stroke="#8b949e" stroke-width="1" stroke-dasharray="4 3"/>
+      <text x="${W - pad.r}" y="${y(1328) - 4}" fill="#8b949e" font-size="8.5"
+      text-anchor="end">콜드 실측 1,328ms</text>`;
+  }
+  // 막대
+  c.forEach((x, i) => {
+    const v = x.latencyMs || 0;
+    const bx = pad.l + i * (iw / c.length) + 1.5;
+    const by = y(v), bh = Math.max(1, pad.t + ih - by);
+    g += `<rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="2"
+      fill="${x.coldStart ? '#f85149' : '#3fb950'}"><title>${v}ms · ${x.source} · ${x.mode}</title></rect>`;
+  });
+  g += `<line x1="${pad.l}" y1="${pad.t + ih}" x2="${W - pad.r}" y2="${pad.t + ih}"
+    stroke="#30363d"/>
+    <text x="${pad.l}" y="${H - 6}" fill="#8b949e" font-size="9">오래됨</text>
+    <text x="${W - pad.r}" y="${H - 6}" fill="#8b949e" font-size="9" text-anchor="end">최근</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="최근 호출 지연 비교">${g}</svg>`;
+}
+
+function drawStats() {
+  const c = S.calls, tb = $('#stats').querySelector('tbody');
+  if (!c.length) { tb.innerHTML = '<tr><td colspan="3">기록 없음</td></tr>'; return; }
+  const grp = {};
+  c.forEach(x => {
+    const k = x.source || '-';
+    (grp[k] = grp[k] || []).push(x.latencyMs || 0);
+  });
+  const med = a => { const s = [...a].sort((p, q) => p - q);
+    return Math.round(s[Math.floor(s.length / 2)]); };
+  let rows = '<tr><th>source</th><th>건수</th><th>중간값</th></tr>';
+  Object.keys(grp).forEach(k => {
+    rows += `<tr><td>${esc(k)}</td><td class="n">${grp[k].length}</td>
+      <td class="n">${med(grp[k])}ms</td></tr>`;
+  });
+  const warm = c.filter(x => !x.coldStart), cold = c.filter(x => x.coldStart);
+  if (warm.length && cold.length) {
+    rows += `<tr><td><b>웜 vs 콜드</b></td><td class="n">${warm.length}:${cold.length}</td>
+      <td class="n"><b>${(med(cold.map(x=>x.latencyMs))/med(warm.map(x=>x.latencyMs))).toFixed(1)}배</b></td></tr>`;
+  }
+  tb.innerHTML = rows;
+}
+
+// ── 시나리오 ────────────────────────────────────────────────────────────
+function scLog(html) {
+  const d = document.createElement('div');
+  d.className = 'note';
+  d.innerHTML = html;
+  $('#scOut').prepend(d);
+  return d;
+}
+const fmt = r => r.error ? '<span class="err">' + esc(r.error) + '</span>'
+  : `<code>${r.latencyMs}ms</code> source=<b>${esc(r.source)}</b> `
+    + (r.coldStart ? '<span style="color:var(--cold)">콜드</span>'
+                   : '<span style="color:var(--warm)">웜</span>');
+
+const SC = {
+  async seq() {
+    const box = scLog('① 연속 질문 3회 <span class="spin"></span>');
+    const out = [];
+    for (let i = 1; i <= 3; i++) {
+      const r = await ask('연속 질문 ' + i);
+      out.push(`${i}회: ${fmt(r)}`);
+      box.innerHTML = '① 연속 질문 3회<br>' + out.join('<br>');
+    }
+    box.innerHTML += '<br><b>기대</b>: 1회는 pool, 2·3회는 reused, 전부 웜.';
+  },
+  async end() {
+    const box = scLog('② 세션 종료 후 재질문 <span class="spin"></span>');
+    const a = await ask('종료 전 질문');
+    await api('/session/end', { userId: S.userId,
+      sessionId: S.mode === 'client' ? S.client.sessionId : undefined });
+    S.client.sessionId = null; S.client.lastCallAt = 0; saveClient();
+    const b = await ask('종료 후 재질문');
+    box.innerHTML = '② 세션 종료 후 재질문<br>종료 전: ' + fmt(a)
+      + '<br>StopRuntimeSession 실행<br>종료 후: ' + fmt(b)
+      + '<br><b>해석</b>: 종료 후가 pool이면 풀이 콜드스타트를 막아준 것이고, '
+      + 'fresh면 재고가 비어 있었다는 뜻입니다.';
+    renderModeNote(); refreshPool();
+  },
+  async drain() {
+    const p = await api('/pool');
+    const n = Math.max(2, (p.depth ?? 2)) + 3;
+    const box = scLog(`③ 풀 소진 — 신규 유저 ${n}명 <span class="spin"></span>`);
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const r = await ask('신규 유저 질문', { userId: 'drain-' + Date.now() + '-' + i });
+      out.push(`${i}명: ${fmt(r)}`);
+      box.innerHTML = `③ 풀 소진 — 신규 유저 ${n}명<br>` + out.join('<br>');
+      refreshPool();
+    }
+    box.innerHTML += '<br><b>해석</b>: pool → fresh 로 넘어가는 지점이 재고가 바닥난 순간이고, '
+      + '거기서 지연이 급등합니다. 이것이 웜풀이 필요한 이유입니다.';
+  },
+  async ab() {
+    const box = scLog('④ A/B 비교 <span class="spin"></span>');
+    const u = 'ab-' + Date.now();
+    const s = await ask('A/B 테스트 질문', { mode: 'store', userId: u + '-s' });
+    const c = await ask('A/B 테스트 질문', { mode: 'client', userId: u + '-c',
+                                            forceNew: true });
+    box.innerHTML = '④ A/B 비교<br>방식 2 (store): ' + fmt(s)
+      + '<br>방식 1 (client): ' + fmt(c)
+      + '<br><b>해석</b>: 지연이 비슷하면 정상입니다. 두 방식의 차이는 성능이 아니라 '
+      + '운영 특성(클라이언트 수정 필요 여부, uuid 위조 가능성, 외부 저장소 의존)입니다.';
+    refreshPool();
+  },
+};
+document.querySelectorAll('[data-sc]').forEach(b =>
+  b.addEventListener('click', async () => {
+    document.querySelectorAll('[data-sc]').forEach(x => x.disabled = true);
+    try { await SC[b.dataset.sc](); }
+    catch (e) { scLog('<span class="err">시나리오 실패: ' + esc(e.message) + '</span>'); }
+    finally { document.querySelectorAll('[data-sc]').forEach(x => x.disabled = false); }
+  }));
+
+// ── 초기화 ──────────────────────────────────────────────────────────────
+renderModeNote(); drawChart(); drawStats(); refreshPool();
+setInterval(refreshPool, 3000);
+$('#q').focus();
+</script>
+</div>
+</body>
+</html>
