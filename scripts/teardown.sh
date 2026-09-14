@@ -3,7 +3,7 @@
 # AgentCore Runtime 웜풀 GUI 데모 — 전체 스택 삭제
 #
 # deploy.sh 가 만든 것을 역순으로 지운다.
-#   CloudFront → 웹 버킷 → API GW → Lambda → SQS → DynamoDB
+#   CloudFront → 웹 버킷 → API GW → heartbeat 규칙 → Lambda → SQS → DynamoDB
 #   → AgentCore Runtime → 코드 버킷 → IAM 역할
 #
 # 사용법:
@@ -61,6 +61,7 @@ TABLE_NAME="${STACK}-sessions"
 QUEUE_NAME="${STACK}-pool.fifo"
 LAMBDA_NAME="${STACK}-proxy"
 API_NAME="${STACK}-api"
+RULE_NAME="${STACK}-heartbeat"
 OAC_NAME="${STACK}-web-oac"
 CF_COMMENT="${STACK} agentcore warm pool demo"
 
@@ -92,6 +93,11 @@ API_ID="$(aws apigatewayv2 get-apis --region "$REGION" \
   --query "Items[?Name=='${API_NAME}'].ApiId | [0]" --output text 2>/dev/null || true)"
 [[ "$API_ID" == "None" ]] && API_ID=""
 [[ -n "$API_ID" ]] && add "API Gateway HTTP API   ${API_NAME} (${API_ID})"
+
+HAS_RULE=0
+if aws events describe-rule --region "$REGION" --name "$RULE_NAME" >/dev/null 2>&1; then
+  HAS_RULE=1; add "EventBridge 규칙       ${RULE_NAME} (heartbeat)"
+fi
 
 HAS_LAMBDA=0
 if aws lambda get-function --region "$REGION" --function-name "$LAMBDA_NAME" >/dev/null 2>&1; then
@@ -260,6 +266,23 @@ if [[ -n "$API_ID" ]]; then
   # HTTP API 를 지우면 라우트·통합·스테이지가 함께 사라진다.
   aws apigatewayv2 delete-api --region "$REGION" --api-id "$API_ID"
   say "삭제: ${API_NAME} (${API_ID})"
+fi
+
+# ── 4b. EventBridge heartbeat 규칙 ───────────────────────────────────────
+# Lambda 보다 먼저 지운다. 규칙을 남긴 채 함수를 지우면 규칙이 5분마다 없는 함수를
+# 호출하며 실패 지표만 쌓는다. 또 타깃이 붙어 있으면 delete-rule 이 거부된다.
+if [[ $HAS_RULE -eq 1 ]]; then
+  step "EventBridge 규칙 삭제"
+  RULE_TARGET_IDS="$(aws events list-targets-by-rule --region "$REGION" \
+    --rule "$RULE_NAME" --query 'Targets[].Id' --output text 2>/dev/null || true)"
+  if [[ -n "$RULE_TARGET_IDS" && "$RULE_TARGET_IDS" != "None" ]]; then
+    # shellcheck disable=SC2086  # 공백 구분 ID 목록을 개별 인자로 넘겨야 한다
+    aws events remove-targets --region "$REGION" --rule "$RULE_NAME" \
+      --ids $RULE_TARGET_IDS >/dev/null
+    say "타깃 제거: ${RULE_TARGET_IDS}"
+  fi
+  aws events delete-rule --region "$REGION" --name "$RULE_NAME"
+  say "삭제: ${RULE_NAME}"
 fi
 
 # ── 5. Lambda ────────────────────────────────────────────────────────────

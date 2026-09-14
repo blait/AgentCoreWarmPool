@@ -40,6 +40,26 @@
 이 레포의 코드를 실제로 `ap-northeast-2`에 배포해 두 방식 모두 동작을 확인했습니다.
 아래는 실행 로그를 그대로 옮긴 값입니다.
 
+> **⚠️ 아래 로그와 현재 커밋의 차이 (2026-09-14 수정)**
+>
+> 이 로그를 얻은 뒤 코드 리뷰에서 세 가지 배포 결함을 찾아 고쳤습니다. 로그를 만든
+> 실행본과 현재 트리는 아래만큼 다릅니다.
+>
+> 1. **`RUNTIME_REGION`** — 프록시가 모듈 스코프에서 이 변수를 필수로 읽는데
+>    `deploy.sh`가 주입하지 않았습니다. 로그를 얻은 실행본은 리전을 다른 방식으로
+>    받았고, 지금은 `RUNTIME_REGION` 주입 + `AWS_REGION` 폴백 양쪽을 갖췄습니다.
+>    **아래 지연·`source` 값은 세션 선택 로직의 결과이고, 그 로직은 이 수정으로
+>    바뀌지 않았습니다.**
+> 2. **heartbeat 스케줄러** — 로그를 얻을 때 heartbeat는 **손으로 호출**했습니다
+>    (아래 "heartbeat 후 재고 사용 가능" 항목도 수동 호출 결과입니다).
+>    EventBridge 규칙은 이 수정에서 새로 추가한 것이며 **아직 실측하지 않았습니다.**
+> 3. **큐 보관 기간** — 1시간이었습니다. 즉 §7의 8시간 rolling replacement는
+>    당시 도달 불가능한 코드였고, **지금도 실측되지 않았습니다**(보관 기간만 8시간으로
+>    올려 도달 가능하게 만든 상태입니다).
+>
+> 요약하면 **1회성 지연 측정치는 유효하고, 시간이 지나야 드러나는 항목
+> (heartbeat 자동 주기, 8시간 교체)은 미검증**입니다.
+
 ### 방식 2 — 연속 질문
 
 ```
@@ -104,11 +124,13 @@ pop이 빈손이 되어, 웜풀의 목적 자체가 무너지는 버그입니다
 | 방식 2 — pool → reused 전환 | ✅ 117.9 → 104.5 → 84.2ms |
 | 방식 1 — 13분 초과 감지 후 교체 | ✅ source=pool, 125ms |
 | 풀 소진 시 fresh 폴백 | ✅ 1,263~1,350ms |
-| heartbeat 후 재고 사용 가능 | ✅ 수정 후 확인 |
+| heartbeat 후 재고 사용 가능 | ✅ 수정 후 확인 (**수동 호출**) |
 | StopRuntimeSession → 재질문 | ✅ 세션 교체 |
 | CloudFront → API GW → Lambda → Runtime | ✅ 158ms |
 | warmup 센티널이 LLM 우회 | ✅ 예열 1,489ms 흡수 |
 | 보충 속도 · 지속 부하 | ⚠️ 미측정 (6절 참조) |
+| **heartbeat 자동 주기(EventBridge)로 재고 유지** | ⚠️ **미측정** — 규칙은 추가했으나 1주기 이상 관측하지 않았습니다 |
+| **8시간 rolling replacement 실제 발동** | ⚠️ **미측정** — 8시간 관측이 필요합니다 |
 
 ---
 
@@ -196,6 +218,7 @@ pop이 빈손이 되어, 웜풀의 목적 자체가 무너지는 버그입니다
 | `lambda`, `apigateway` | proxy API |
 | `dynamodb` | 세션 매핑 테이블 (방식 2) |
 | `sqs` | 예열 uuid 큐 |
+| `events` | heartbeat 스케줄 규칙 (`PutRule`, `PutTargets`) |
 | `s3`, `cloudfront` | 정적 웹 호스팅 |
 
 ### 배포
@@ -219,10 +242,15 @@ export AWS_REGION=ap-northeast-2
 
 | 변수 | 내용 |
 |---|---|
-| `AWS_REGION` | 배포 리전 |
+| `AWS_REGION` | 배포 리전. Lambda 가 자동 주입하는 예약 변수이므로 직접 설정할 수 없습니다 |
+| `RUNTIME_REGION` | 런타임을 호출할 리전. `deploy.sh` 가 주입하며, 없으면 `AWS_REGION` 으로 폴백합니다 |
 | `RUNTIME_ARN` | AgentCore Runtime ARN |
 | `TABLE_NAME` | DynamoDB 세션 매핑 테이블 |
 | `QUEUE_URL` | SQS FIFO 큐 URL |
+
+`deploy.sh` 는 `--environment` 로 Lambda 의 `Variables` 맵을 **전체 교체**합니다.
+코드가 읽는 변수를 스크립트에서 하나라도 빼면 모듈 로드 시점에 `KeyError` 가 나고
+**전 라우트가 502** 가 됩니다. 그래서 변수를 추가할 때는 양쪽을 함께 고쳐야 합니다.
 
 ### 정리
 
@@ -262,7 +290,17 @@ export AWS_REGION=ap-northeast-2
 - 풀 재고 N개를 유지하면 위 값의 N배가 됩니다. heartbeat로 세션을 계속 살려두면
   15분이 아니라 **유지하는 시간 전체**에 대해 과금됩니다.
 
-DynamoDB·SQS·Lambda·CloudFront 비용은 별도이며, 데모 규모에서는 무시할 수준입니다.
+> **⚠️ heartbeat는 스케줄러로 자동 실행됩니다.** `deploy.sh`가 EventBridge 규칙을
+> 만들어 기본 5분마다 재고를 예열하므로, **브라우저를 닫아도 과금이 계속됩니다.**
+> 이것이 웜풀의 본질적 비용입니다(재고가 썩는 것을 막는 대가). 데모를 잠시 멈추려면
+> 규칙만 끄고, 끝났으면 teardown 하십시오.
+>
+> ```bash
+> aws events disable-rule --region ap-northeast-2 --name acwp-heartbeat   # 잠시 멈춤
+> ./scripts/teardown.sh                                                   # 완전 정리
+> ```
+
+DynamoDB·SQS·Lambda·EventBridge·CloudFront 비용은 별도이며, 데모 규모에서는 무시할 수준입니다.
 
 ---
 
@@ -335,7 +373,7 @@ docs/architecture.md     두 방식의 요청 흐름 + 8개 시나리오
 | `POST /api/chat` | 대화. `source`(`reused`/`pool`/`fresh`)와 `coldStart`를 함께 반환 |
 | `GET /api/pool` | 풀 재고 조회 (uuid는 앞 8자만 노출) |
 | `POST /api/pool/refill` | 재고 보충 |
-| `POST /api/pool/heartbeat` | 재고 세션에 핑 — idle 만료 방지 |
+| `POST /api/pool/heartbeat` | 재고 세션에 핑 — idle 만료 방지. `deploy.sh`가 만든 EventBridge 규칙 `<stack>-heartbeat`가 `idle/3` 주기(기본 5분)로 Lambda를 직접 호출합니다. UI 버튼은 시연용입니다 |
 | `POST /api/session/end` | 세션 종료 |
 | `GET /api/metrics` | 최근 50건 호출 기록 |
 

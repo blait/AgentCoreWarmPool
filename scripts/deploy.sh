@@ -364,7 +364,8 @@ else
       break
     fi
     if [[ $attempt -eq 6 ]]; then
-      cat "${TMP}/runtime.err" >&2
+      # mask 를 거친다 — AWS CLI 오류 문자열에 역할 ARN(계정 ID 포함)이 들어간다.
+      mask "$(cat "${TMP}/runtime.err")" >&2; echo >&2
       die "create-agent-runtime 실패"
     fi
     say "IAM 전파 대기 후 재시도 (${attempt}/5)…"
@@ -382,8 +383,8 @@ for i in $(seq 1 120); do
   case "$STATUS" in
     READY) break ;;
     CREATE_FAILED|UPDATE_FAILED)
-      aws bedrock-agentcore-control get-agent-runtime --region "$REGION" \
-        --agent-runtime-id "$RUNTIME_ID" --query failureReason --output text >&2
+      mask "$(aws bedrock-agentcore-control get-agent-runtime --region "$REGION" \
+        --agent-runtime-id "$RUNTIME_ID" --query failureReason --output text)" >&2; echo >&2
       die "런타임이 ${STATUS} 상태다." ;;
   esac
   [[ $i -eq 120 ]] && die "10분 안에 READY 가 되지 않았다 (마지막 상태: ${STATUS})."
@@ -429,18 +430,33 @@ fi
 # ── 6. SQS FIFO (예열 uuid 재고) ─────────────────────────────────────────
 step "6/10 SQS FIFO 큐"
 
+# ⚠️ MessageRetentionPeriod 는 microVM 최대 수명(MAX_LIFETIME=8시간) 이상이어야 한다.
+# 짧게 잡으면 SQS 가 재고 메시지를 그 시각에 하드 삭제해버려서,
+#   - heartbeat 가 살려둔 세션의 uuid 가 큐에서 사라지고(세션은 idle 만료까지 과금 누수),
+#   - 서버의 7시간 rolling replacement 판정(MAX_VM_AGE_SEC)에 도달하는 메시지가 아예
+#     없어져 그 분기가 죽은 코드가 된다.
+# 8시간으로 두면 "8시간에 강제 종료되기 전 7시간에 교체" 설계가 실제로 실행된다.
+QUEUE_RETENTION="${QUEUE_RETENTION:-$MAX_LIFETIME}"
+QUEUE_ATTRS="VisibilityTimeout=30,MessageRetentionPeriod=${QUEUE_RETENTION}"
+
 if QUEUE_URL="$(aws sqs get-queue-url --region "$REGION" --queue-name "$QUEUE_NAME" \
                   --query QueueUrl --output text 2>/dev/null)"; then
-  skip "큐 ${QUEUE_NAME} 이미 존재"
+  skip "큐 ${QUEUE_NAME} 이미 존재 — 보관 기간만 갱신"
+  # 기존 큐(예: 1시간 보관으로 만들어진 큐)도 재실행으로 고쳐진다.
+  # FifoQueue / ContentBasedDeduplication 은 여기서 다시 보내지 않는다
+  # (FifoQueue 는 생성 후 변경 불가라 InvalidAttributeName 이 난다).
+  aws sqs set-queue-attributes --region "$REGION" --queue-url "$QUEUE_URL" \
+    --attributes "$QUEUE_ATTRS" >/dev/null
 else
   # ContentBasedDeduplication=true 이면 MessageDeduplicationId 를 매번 만들지 않아도 된다.
   # 단, 같은 uuid 를 5분 안에 두 번 넣으면 중복 제거로 조용히 사라진다(예열 재고 특성상 OK).
   QUEUE_URL="$(aws sqs create-queue --region "$REGION" --queue-name "$QUEUE_NAME" \
-    --attributes 'FifoQueue=true,ContentBasedDeduplication=true,VisibilityTimeout=30,MessageRetentionPeriod=3600' \
+    --attributes "FifoQueue=true,ContentBasedDeduplication=true,${QUEUE_ATTRS}" \
     --query QueueUrl --output text)"
   say "생성: ${QUEUE_NAME}"
 fi
 say "queue=$(mask "$QUEUE_URL")"
+say "보관 기간: ${QUEUE_RETENTION}초 (microVM 최대 수명 ${MAX_LIFETIME}초 이상이어야 한다)"
 
 # ── 7. Lambda + API Gateway HTTP API ─────────────────────────────────────
 step "7/10 Lambda proxy + API Gateway HTTP API"
@@ -455,8 +471,12 @@ find "${TMP}/lambdapkg" -type d -exec chmod 755 {} +
 
 # ⚠️ AWS_REGION 은 Lambda 예약 환경변수라 직접 설정하면 InvalidParameterValueException
 # 이 난다. 런타임이 자동으로 넣어주므로 코드에서 os.environ["AWS_REGION"] 으로 읽으면 된다.
+# RUNTIME_REGION 은 예약어가 아니므로 명시적으로 넣는다 — 코드가 이 값을 우선 읽고,
+# 없으면 AWS_REGION 으로 폴백한다. --environment 는 Variables 맵 전체를 교체하므로
+# 코드가 읽는 변수를 여기서 하나라도 빼면 모듈 로드가 실패해 전 라우트가 502 가 된다.
 LAMBDA_ENV="$(jq -n \
   --arg runtime_arn   "$RUNTIME_ARN" \
+  --arg region        "$REGION" \
   --arg table         "$TABLE_NAME" \
   --arg queue         "$QUEUE_URL" \
   --arg target        "$POOL_TARGET" \
@@ -465,6 +485,7 @@ LAMBDA_ENV="$(jq -n \
   --arg cold          "$COLD_UPTIME_MS" \
   '{Variables:{
       RUNTIME_ARN: $runtime_arn,
+      RUNTIME_REGION: $region,
       TABLE_NAME: $table,
       QUEUE_URL: $queue,
       POOL_TARGET: $target,
@@ -502,7 +523,7 @@ else
       break
     fi
     if [[ $attempt -eq 6 ]]; then
-      cat "${TMP}/lambda.err" >&2
+      mask "$(cat "${TMP}/lambda.err")" >&2; echo >&2
       die "create-function 실패"
     fi
     say "IAM 전파 대기 후 재시도 (${attempt}/5)…"
@@ -548,8 +569,86 @@ else
 fi
 say "api=${API_ENDPOINT}"
 
-# ── 8. S3 웹 버킷 + CloudFront ───────────────────────────────────────────
-step "8/10 정적 웹 버킷 + CloudFront"
+# ── 8. heartbeat 스케줄러 (EventBridge) ──────────────────────────────────
+step "8/11 heartbeat 스케줄러 (EventBridge rule)"
+
+# ⚠️ 이것이 없으면 웜풀은 IDLE_SECONDS 뒤에 스스로 비워지고 회복하지 않는다.
+# 큐에 담긴 uuid 는 그 자체로는 아무 일도 하지 않으므로, 마지막 예열 핑으로부터
+# idle 타임아웃이 지나면 microVM 이 죽고 큐에는 껍데기 uuid 만 남는다. 그리고
+# 죽은 uuid 를 pop 하는 것은 에러가 아니라 HTTP 200 + 콜드스타트이므로 조용히 썩는다.
+# UI 의 'heartbeat 실행' 버튼은 시연용이다 — 사람이 안 누르면 아무도 핑하지 않는다.
+#
+# 주기는 IDLE_SECONDS 보다 충분히 짧아야 한다. 핑 실패·재시도 시간까지 흡수하도록
+# idle 의 1/3 로 잡는다 (idle=900 → 5분). rate() 최소 단위가 1분이라 하한을 둔다.
+HEARTBEAT_MINUTES="${HEARTBEAT_MINUTES:-$(( IDLE_SECONDS / 180 ))}"
+if [[ "$HEARTBEAT_MINUTES" -lt 1 ]]; then HEARTBEAT_MINUTES=1; fi
+if [[ $(( HEARTBEAT_MINUTES * 60 * 3 )) -gt "$IDLE_SECONDS" ]]; then
+  say "경고: heartbeat 주기 ${HEARTBEAT_MINUTES}분이 idle ${IDLE_SECONDS}초의 1/3 보다 길다."
+fi
+# rate(1 minute) 는 단수, 2 이상은 복수여야 한다.
+if [[ "$HEARTBEAT_MINUTES" -eq 1 ]]; then
+  HEARTBEAT_RATE="rate(1 minute)"
+else
+  HEARTBEAT_RATE="rate(${HEARTBEAT_MINUTES} minutes)"
+fi
+
+# _heartbeat() 는 1회 호출에 receive 1회(최대 10건)만 처리한다 — 환원한 메시지를
+# 같은 실행에서 다시 집어 재고 전체가 잠기는 버그를 피하기 위한 설계다.
+# 그래서 재고가 10개를 넘으면 타깃을 여러 개 두어 병렬로 호출한다.
+HEARTBEAT_FANOUT=$(( (POOL_TARGET + 9) / 10 ))
+if [[ "$HEARTBEAT_FANOUT" -lt 1 ]]; then HEARTBEAT_FANOUT=1; fi
+if [[ "$HEARTBEAT_FANOUT" -gt 5 ]]; then HEARTBEAT_FANOUT=5; fi
+
+RULE_NAME="${STACK}-heartbeat"
+RULE_ARN="$(aws events put-rule --region "$REGION" \
+  --name "$RULE_NAME" \
+  --schedule-expression "$HEARTBEAT_RATE" \
+  --state ENABLED \
+  --description "AgentCore warm pool heartbeat for ${STACK} (idle=${IDLE_SECONDS}s)" \
+  --query RuleArn --output text)"
+say "규칙: ${RULE_NAME} — ${HEARTBEAT_RATE}"
+
+# EventBridge 는 Lambda 를 직접 호출하므로 API Gateway 를 거치지 않는다.
+# 핸들러는 rawPath 로 라우팅하므로, HTTP API payload v2.0 모양을 그대로 흉내 낸 이벤트를
+# --input 으로 넣으면 코드를 고치지 않고 /api/pool/heartbeat 경로를 탄다.
+#
+# ⚠️ 한계: 핸들러는 실패를 예외로 던지지 않고 statusCode 500 을 담은 dict 로 돌려준다.
+# EventBridge 는 반환값을 보지 않으므로, 핑이 계속 실패해도 Lambda Errors 지표는
+# 0 이고 규칙은 성공으로 집계된다. 즉 이 규칙만으로는 "재고가 썩는 것"을 감지할 수 없다.
+# 운영에서는 /api/pool 의 staleRisk 나 pinged 값에 알람을 걸어야 한다.
+HEARTBEAT_INPUT="$(jq -nc '{
+  rawPath: "/api/pool/heartbeat",
+  requestContext: { http: { method: "POST" } },
+  body: "{}"
+}')"
+
+# 타깃 Id 는 규칙 안에서만 유일하면 된다. put-targets 는 같은 Id 를 덮어쓰므로 idempotent.
+TARGETS="$(jq -nc \
+  --arg arn "$LAMBDA_ARN" \
+  --arg input "$HEARTBEAT_INPUT" \
+  --argjson n "$HEARTBEAT_FANOUT" \
+  '[range(1; $n + 1) | {Id: ("hb-" + (. | tostring)), Arn: $arn, Input: $input}]')"
+aws events put-targets --region "$REGION" --rule "$RULE_NAME" \
+  --targets "$TARGETS" >/dev/null
+say "타깃: ${LAMBDA_NAME} × ${HEARTBEAT_FANOUT} (재고 ${POOL_TARGET}개 / 1회 최대 10건)"
+
+# 규칙이 Lambda 를 호출할 권한. SourceArn 을 규칙 ARN 으로 좁힌다.
+HB_PERM_SID="${STACK}-events-invoke"
+if aws lambda get-policy --region "$REGION" --function-name "$LAMBDA_NAME" \
+     --query Policy --output text 2>/dev/null | grep -q "\"${HB_PERM_SID}\""; then
+  skip "Lambda 호출 권한 ${HB_PERM_SID} 이미 존재"
+else
+  aws lambda add-permission --region "$REGION" \
+    --function-name "$LAMBDA_NAME" \
+    --statement-id "$HB_PERM_SID" \
+    --action lambda:InvokeFunction \
+    --principal events.amazonaws.com \
+    --source-arn "$RULE_ARN" >/dev/null
+  say "권한 부여: events.amazonaws.com → ${LAMBDA_NAME}"
+fi
+
+# ── 9. S3 웹 버킷 + CloudFront ───────────────────────────────────────────
+step "9/11 정적 웹 버킷 + CloudFront"
 
 make_bucket "$WEB_BUCKET"
 aws s3api put-object --bucket "$WEB_BUCKET" --key index.html \
@@ -692,8 +791,8 @@ aws s3api put-bucket-policy --bucket "$WEB_BUCKET" \
         }]}')" >/dev/null
 say "버킷 정책: ${WEB_BUCKET} ← CloudFront OAC 전용"
 
-# ── 9. 초기 풀 보충 ──────────────────────────────────────────────────────
-step "9/10 초기 웜풀 보충 (target=${POOL_TARGET})"
+# ── 10. 초기 풀 보충 ─────────────────────────────────────────────────────
+step "10/11 초기 웜풀 보충 (target=${POOL_TARGET})"
 
 # CloudFront 배포 완료를 기다리지 않고 API Gateway 를 직접 호출한다.
 # (배포 전파는 수 분 걸리지만 예열은 지금 시작해야 의미가 있다)
@@ -706,17 +805,27 @@ if [[ "$REFILL_CODE" == "200" ]]; then
   if curl -sS -o "${TMP}/pool.json" --max-time 30 "${API_ENDPOINT}/api/pool" >/dev/null 2>&1; then
     say "pool depth: $(jq -r '.depth // "?"' "${TMP}/pool.json" 2>/dev/null || echo '?')"
   fi
+elif [[ "$REFILL_CODE" =~ ^5 ]]; then
+  # ⚠️ 5xx 는 프록시 자체가 깨진 것이다. 특히 502 Runtime.ImportModuleError 는
+  # 모듈 로드 실패(환경변수 누락 등)이므로 /api/chat 을 포함한 **전 라우트**가 죽는다.
+  # 이걸 경고로 넘기고 "완료"를 찍으면 운영자가 정상 배포로 믿게 되므로 여기서 죽인다.
+  # 인프라는 이미 만들어졌고 이 스크립트는 idempotent 하니, 고친 뒤 그대로 재실행하면 된다.
+  printf '    \033[31mrefill 이 HTTP %s 로 응답했다 — 프록시가 깨졌다.\033[0m\n' "$REFILL_CODE"
+  [[ -s "${TMP}/refill.json" ]] && printf '    본문: %s\n' "$(mask "$(head -c 400 "${TMP}/refill.json")")"
+  printf '    로그를 먼저 보라:\n'
+  printf '      aws logs tail /aws/lambda/%s --region %s --since 5m\n' "$LAMBDA_NAME" "$REGION"
+  die "스모크 테스트 실패. 인프라는 생성되었으나 API 가 동작하지 않는다(배포 미완료)."
 else
-  # 배포 자체를 실패시키지는 않는다. 인프라는 다 섰고 UI 의 refill 버튼으로 재시도 가능하다.
+  # 네트워크·타임아웃(000)이나 4xx 는 전파 지연 등 일시적일 수 있다. 경고만 남긴다.
   printf '    \033[33m경고: refill 이 HTTP %s 로 응답했다. 인프라는 생성되었으니\n' "$REFILL_CODE"
   printf "           UI 의 'refill' 버튼이나 아래 명령으로 다시 시도하라.\033[0m\n"
   printf '           curl -X POST %s/api/pool/refill -d %s\n' \
     "${API_ENDPOINT}" "'{\"count\":${POOL_TARGET}}'"
-  [[ -s "${TMP}/refill.json" ]] && printf '           본문: %s\n' "$(head -c 400 "${TMP}/refill.json")"
+  [[ -s "${TMP}/refill.json" ]] && printf '           본문: %s\n' "$(mask "$(head -c 400 "${TMP}/refill.json")")"
 fi
 
-# ── 10. 결과 ─────────────────────────────────────────────────────────────
-step "10/10 완료"
+# ── 11. 결과 ─────────────────────────────────────────────────────────────
+step "11/11 완료"
 cat <<TXT
 
   ┌─────────────────────────────────────────────────────────────
@@ -729,8 +838,15 @@ cat <<TXT
     API   : ${API_ENDPOINT}
     런타임: ${RUNTIME_NAME} (${RUNTIME_ID})
     테이블: ${TABLE_NAME}   (TTL: ttl)
-    큐    : ${QUEUE_NAME}
+    큐    : ${QUEUE_NAME}   (보관 ${QUEUE_RETENTION}초)
+    핑    : ${RULE_NAME}  ${HEARTBEAT_RATE} × ${HEARTBEAT_FANOUT}  (idle=${IDLE_SECONDS}초)
     배포  : CloudFront ${DIST_ID}
+
+  ⚠️ heartbeat 규칙이 재고를 계속 살려두므로 아무도 쓰지 않아도 microVM 메모리가
+     과금된다. 이것이 웜풀의 비용이다 — 재고가 썩는 것을 막는 대가다.
+     비용을 멈추려면 규칙을 끄거나(아래) teardown 하라.
+
+    aws events disable-rule --region ${REGION} --name ${RULE_NAME}
 
   ⚠️ 이 API 는 인증이 없다(데모 목적). 공개 URL 을 아무에게나 주면 그 사람이
      당신 계정에서 AgentCore 세션을 띄우게 된다. 실습이 끝나면 반드시 정리하라.

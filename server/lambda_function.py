@@ -15,6 +15,7 @@
 터지면 "왜 fresh 만 나오지"를 디버깅하게 되므로, 배포 직후 실패하는 편이 낫다.
 """
 import json
+import logging
 import os
 import time
 import uuid
@@ -22,13 +23,21 @@ import uuid
 import boto3
 from botocore.config import Config
 
+# 예외 상세는 응답이 아니라 CloudWatch 로만 보낸다(계정 ID 유출 방지).
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 # ── 환경변수 ────────────────────────────────────────────────────────────────
 # os.environ[...] 로 읽어 미설정 시 KeyError 로 즉시 실패시킨다.
 # 계정 ID·ARN·큐 URL·테이블명은 공개 레포에 하드코딩하지 않는다.
 RUNTIME_ARN = os.environ["RUNTIME_ARN"]
 TABLE_NAME = os.environ["TABLE_NAME"]
 QUEUE_URL = os.environ["QUEUE_URL"]
-RUNTIME_REGION = os.environ["RUNTIME_REGION"]
+# 리전은 RUNTIME_REGION 을 우선하고, 없으면 Lambda 가 자동 주입하는 AWS_REGION 을 쓴다.
+# AWS_REGION 은 예약 환경변수라 --environment 로 직접 설정할 수 없다(InvalidParameterValue).
+# 그래서 "런타임이 넣어주는 값"을 기본으로 두고, 다른 리전의 런타임을 호출해야 할 때만
+# RUNTIME_REGION 으로 덮어쓴다. 둘 다 없으면 여기서 KeyError 로 즉시 죽는다.
+RUNTIME_REGION = os.environ.get("RUNTIME_REGION") or os.environ["AWS_REGION"]
 POOL_TARGET = int(os.environ["POOL_TARGET"])
 
 # ── 상수 ────────────────────────────────────────────────────────────────────
@@ -298,7 +307,9 @@ def _refill(count):
         try:
             _invoke(session_id, {"type": "warmup"})
         except Exception as e:                                   # noqa: BLE001
-            errors.append(f"{type(e).__name__}: {e}")
+            logger.exception("warmup ping failed")
+            # ⚠️ 예외 문자열에는 ARN 이 들어간다. 타입명만 남긴다.
+            errors.append(type(e).__name__)
             continue                                  # 실패분은 큐에 넣지 않는다
         now = time.time()
         try:
@@ -307,7 +318,7 @@ def _refill(count):
         except Exception as e:                                   # noqa: BLE001
             # 예열은 됐지만 큐 입력이 실패한 경우. 세션은 살아 있고 아무도 모르므로
             # idle 만료까지 메모리 과금만 남는다(누수). 감추지 말고 노출한다.
-            errors.append(f"send_message: {type(e).__name__}: {e}")
+            errors.append(f"send_message: {type(e).__name__}")
     return added, errors
 
 
@@ -454,7 +465,7 @@ def _resolve_store(user_id):
         # 장애가 "조금 느려짐"에서 "전면 성능 붕괴"로 증폭된다.
         # 여기서는 fresh 로 폴백한다 — 이 유저 한 명만 콜드스타트를 맞고,
         # 남은 재고는 정상 유저들이 계속 쓴다.
-        return _new_session_id(), "fresh", f"ddb_get: {type(e).__name__}: {e}"
+        return _new_session_id(), "fresh", f"ddb_get: {type(e).__name__}"
 
     # ⚠️ TTL 값을 직접 비교해 만료를 판정한다.
     # DynamoDB TTL 삭제는 만료 시각 이후 **최대 48시간까지 지연**될 수 있다.
@@ -472,7 +483,7 @@ def _resolve_store(user_id):
     try:
         popped = _pop_from_pool()
     except Exception as e:                                       # noqa: BLE001
-        return _new_session_id(), "fresh", f"sqs_pop: {type(e).__name__}: {e}"
+        return _new_session_id(), "fresh", f"sqs_pop: {type(e).__name__}"
 
     if popped:
         return popped, "pool", None
@@ -503,7 +514,7 @@ def _resolve_client(session_id_in, last_call_at_in):
     try:
         popped = _pop_from_pool()
     except Exception as e:                                       # noqa: BLE001
-        return _new_session_id(), "fresh", f"sqs_pop: {type(e).__name__}: {e}"
+        return _new_session_id(), "fresh", f"sqs_pop: {type(e).__name__}"
 
     if popped:
         return popped, "pool", None
@@ -536,10 +547,12 @@ def _api_chat(body):
             "memorySessionId": _memory_session_id(user_id),
         })
     except Exception as e:                                       # noqa: BLE001
-        # 예외를 삼키지 않고 노출한다. 콜드스타트 데모에서 조용한 실패는
-        # "그냥 느린 것"과 구별되지 않는다.
+        # 실패를 감추지는 않되(콜드스타트 데모에서 조용한 실패는 "그냥 느린 것"과
+        # 구별되지 않는다), 예외 문자열은 응답에 싣지 않는다. AWS 예외 메시지에는
+        # 호출 주체와 대상 리소스의 ARN 이 들어가고, 이 API 는 오소라이저가 없다.
+        logger.exception("invoke failed (session=%s, mode=%s)", session_id, mode)
         return _resp({
-            "error": f"invoke: {type(e).__name__}: {e}",
+            "error": f"invoke: {type(e).__name__}",
             "sessionId": session_id, "source": source, "mode": mode,
             "selectError": sel_err,
         }, 502)
@@ -567,7 +580,7 @@ def _api_chat(body):
         except Exception as e:                                   # noqa: BLE001
             # 쓰기 실패는 이번 응답을 망치지 않는다(답변은 이미 받았다).
             # 다음 호출이 MISS 로 떨어져 세션 하나를 더 쓰게 될 뿐이다.
-            write_err = f"ddb_put: {type(e).__name__}: {e}"
+            write_err = f"ddb_put: {type(e).__name__}"
 
     _record(mode, latency_ms, source, cold_start)
 
@@ -601,8 +614,9 @@ def _api_pool():
             "items": _peek_pool(),
         })
     except Exception as e:                                       # noqa: BLE001
+        logger.exception("pool peek failed")
         return _resp({"depth": -1, "target": POOL_TARGET, "items": [],
-                      "error": f"{type(e).__name__}: {e}"}, 500)
+                      "error": type(e).__name__}, 500)
 
 
 def _api_pool_refill(body):
@@ -627,8 +641,9 @@ def _api_pool_heartbeat():
     try:
         pinged, dropped = _heartbeat()
     except Exception as e:                                       # noqa: BLE001
+        logger.exception("heartbeat failed")
         return _resp({"pinged": 0, "depth": _pool_depth(),
-                      "error": f"{type(e).__name__}: {e}"}, 500)
+                      "error": type(e).__name__}, 500)
     out = {"pinged": pinged, "depth": _pool_depth()}
     if dropped:
         # 8시간 초과분·핑 실패분. refill 로 채워야 하므로 화면에 알린다.
@@ -655,7 +670,7 @@ def _api_session_end(body):
             if item:
                 session_id = item.get("sessionId", {}).get("S")
         except Exception as e:                                   # noqa: BLE001
-            err = f"ddb_get: {type(e).__name__}: {e}"
+            err = f"ddb_get: {type(e).__name__}"
 
     stopped = False
     if session_id:
@@ -669,14 +684,14 @@ def _api_session_end(body):
             # 이미 죽은 세션을 끄는 것은 정상 흐름이다(ResourceNotFound 등).
             # 실패해도 아래 매핑 삭제는 진행한다 — 남겨두면 다음 호출이 죽은
             # uuid 를 재사용해 콜드스타트가 난다.
-            err = f"stop: {type(e).__name__}: {e}"
+            err = f"stop: {type(e).__name__}"
 
     # 매핑을 지운다. TTL 만료를 기다리지 않는다(삭제가 최대 48시간 지연될 수 있고,
     # 여기서는 ttl 값 비교로 판정하므로 남아 있으면 계속 유효로 읽힐 수 있다).
     try:
         ddb.delete_item(TableName=TABLE_NAME, Key={"pk": {"S": f"sess#{user_id}"}})
     except Exception as e:                                       # noqa: BLE001
-        err = err or f"ddb_delete: {type(e).__name__}: {e}"
+        err = err or f"ddb_delete: {type(e).__name__}"
 
     out = {"stopped": stopped, "sessionId": session_id or ""}
     if err:
@@ -733,10 +748,18 @@ def lambda_handler(event, context):                              # noqa: ARG001
             return _api_metrics()
         return _resp({"error": f"not found: {method} {path}"}, 404)
     except Exception as e:                                       # noqa: BLE001
-        # 최후 방어. 예외를 삼키지 않고 error 로 노출한다. CORS 헤더가 붙어 있어야
-        # 브라우저가 이 메시지를 실제로 볼 수 있다.
-        import traceback
+        # 최후 방어. 전체 내용은 CloudWatch 로만 보내고, 응답에는 예외 타입만 남긴다.
+        #
+        # ⚠️ 예전에는 str(e) 와 traceback 을 그대로 응답에 실었다. 그런데 이 API 는
+        # 오소라이저가 없고 CORS 가 * 이므로, URL 을 아는 누구나 일부러 실패를
+        # 유발해 응답을 읽을 수 있다. AWS 예외 문자열에는 호출 주체와 대상 리소스의
+        # ARN 이 그대로 들어가고(AccessDenied·ValidationException 등), QUEUE_URL 자체에
+        # 계정 ID 가 포함되어 있다. 즉 traceback 하나로 계정 ID 가 공개된다.
+        #
+        # 디버깅은 requestId 로 CloudWatch 로그를 찾아서 한다.
+        logger.exception("unhandled error on %s %s", method, path)
         return _resp({
-            "error": f"{type(e).__name__}: {e}",
-            "trace": traceback.format_exc()[-800:],
+            "error": type(e).__name__,
+            "hint": "자세한 내용은 CloudWatch 로그를 확인하십시오",
+            "requestId": (event.get("requestContext") or {}).get("requestId"),
         }, 500)

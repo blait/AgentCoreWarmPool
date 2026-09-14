@@ -931,6 +931,24 @@ StopRuntimeSession 적용:
 에 있습니다.
 </p>
 
+<div class="note warn">
+  <b>⚠️ 아래 로그와 현재 커밋의 차이</b> — 이 로그를 얻은 뒤 코드 리뷰에서 배포 결함
+  세 가지를 찾아 고쳤습니다. 로그를 만든 실행본과 현재 트리는 아래만큼 다릅니다.
+  <ol>
+    <li><code>RUNTIME_REGION</code> — 프록시가 모듈 스코프에서 필수로 읽는데
+      <code>deploy.sh</code>가 주입하지 않았습니다. 지금은 주입 +
+      <code>AWS_REGION</code> 폴백 양쪽을 갖췄습니다. <b>아래 지연·<code>source</code>
+      값은 세션 선택 로직의 결과이고, 그 로직은 이 수정으로 바뀌지 않았습니다.</b></li>
+    <li><b>heartbeat 스케줄러</b> — 로그를 얻을 때 heartbeat는 <b>손으로 호출</b>했습니다.
+      EventBridge 규칙은 이 수정에서 새로 추가했고 <b>아직 실측하지 않았습니다.</b></li>
+    <li><b>큐 보관 기간</b> — 1시간이었습니다. 즉 §7의 8시간 rolling replacement는
+      당시 도달 불가능한 코드였고, <b>지금도 실측되지 않았습니다</b>(보관 기간만
+      8시간으로 올려 도달 가능하게 만든 상태입니다).</li>
+  </ol>
+  요약하면 <b>1회성 지연 측정치는 유효하고, 시간이 지나야 드러나는 항목(heartbeat 자동
+  주기, 8시간 교체)은 미검증</b>입니다.
+</div>
+
 <h3>방식 2 (저장소 TTL) — 연속 질문</h3>
 <pre class="d">질문1:  117.9ms  source=pool     cold=False  uptime=8149ms  turn=1  restored=True
 질문2:  104.5ms  source=reused   cold=False  uptime=8392ms  turn=2  restored=False
@@ -998,12 +1016,16 @@ heartbeat → {"pinged": 7, "depth": 7}   ·  SQS: visible=7, invisible=0
 <tr><td>방식 2 — pool → reused 전환</td><td><span class="tag t-ok">확인</span> 117.9 → 104.5 → 84.2ms</td></tr>
 <tr><td>방식 1 — 13분 초과 감지 후 교체</td><td><span class="tag t-ok">확인</span> source=pool, 125ms</td></tr>
 <tr><td>풀 소진 시 fresh 폴백</td><td><span class="tag t-ok">확인</span> 1,263~1,350ms</td></tr>
-<tr><td>heartbeat 후 재고 사용 가능</td><td><span class="tag t-ok">수정 후 확인</span> visible=7</td></tr>
+<tr><td>heartbeat 후 재고 사용 가능</td><td><span class="tag t-ok">수정 후 확인</span> visible=7 (<b>수동 호출</b>)</td></tr>
 <tr><td>StopRuntimeSession → 재질문</td><td><span class="tag t-ok">확인</span> 세션 교체됨</td></tr>
 <tr><td>CloudFront → API GW → Lambda → Runtime</td><td><span class="tag t-ok">확인</span> 158ms</td></tr>
 <tr><td>warmup 센티널이 LLM 우회</td><td><span class="tag t-ok">확인</span> 예열 1,489ms를 흡수</td></tr>
 <tr><td>보충 속도 (초당 몇 개)</td><td><span class="tag t-w">미측정</span> §8-1 그대로</td></tr>
 <tr><td>61 TPS 지속 부하</td><td><span class="tag t-w">미측정</span> §8-5 그대로</td></tr>
+<tr><td><b>heartbeat 자동 주기(EventBridge)로 재고 유지</b></td>
+    <td><span class="tag t-w">미측정</span> 규칙은 추가했으나 1주기 이상 관측하지 않았습니다</td></tr>
+<tr><td><b>8시간 rolling replacement 실제 발동</b></td>
+    <td><span class="tag t-w">미측정</span> 8시간 관측이 필요합니다</td></tr>
 </tbody>
 </table>
 </section>
