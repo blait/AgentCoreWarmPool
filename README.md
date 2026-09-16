@@ -11,6 +11,47 @@
 
 ---
 
+## 0. 문서와 코드
+
+### 상세 문서 — 먼저 보십시오
+
+| 문서 | 내용 | 보는 법 |
+|---|---|---|
+| **[`docs/architecture.html`](docs/architecture.html)** | **SVG 아키텍처 다이어그램 3장** + 두 방식 상세 + **시나리오 8개** + **실배포 검증 결과** + heartbeat 버그 분석 | 클론 후 브라우저로 열기 |
+| [`docs/architecture.md`](docs/architecture.md) | 요청 흐름 단계별 설명, heartbeat·8시간 rolling replacement 설계 근거, 원문과 추가 설계의 구분 | GitHub 에서 바로 |
+
+`architecture.html` 은 GitHub 에서 소스로만 보이므로 로컬에서 열어야 합니다.
+
+```bash
+git clone https://github.com/blait/AgentCoreWarmPool.git
+cd AgentCoreWarmPool
+open docs/architecture.html          # macOS
+xdg-open docs/architecture.html     # Linux
+start docs\architecture.html        # Windows
+```
+
+**HTML 문서에서 특히 볼 것**
+
+| 절 | 왜 |
+|---|---|
+| §1 | 콜드 1,328ms vs 웜 101ms 실측 근거, AWS 관리형 웜풀 10개 |
+| §5-1 | **heartbeat 가 웜풀을 무력화시킨 실제 버그** — 로그와 원인 |
+| §5-2 | **`VisibilityTimeout=0` 으로 해결** — 재고를 잠그지 않는 방법 |
+| §6 | 시나리오 8개별 예상 지연과 `source` 값 |
+| §9 | 실배포 검증 결과 전체 |
+
+### 코드 구성
+
+| 경로 | 역할 | 핵심 |
+|---|---|---|
+| [`agent/main.py`](agent/main.py) | AgentCore Runtime 에이전트 | `warmup` 센티널 조기 반환, `uptimeMs` 로 콜드/웜 판별 근거 제공. **stdlib 만 사용** |
+| [`server/lambda_function.py`](server/lambda_function.py) | Lambda 프록시 | 두 방식 분기, SQS 풀 pop/보충/heartbeat |
+| [`web/index.html`](web/index.html) | 데모 GUI | 모드 토글, 풀 시각화, 인라인 SVG 차트, 시나리오 4종. **외부 CDN 의존 없음** |
+| [`scripts/deploy.sh`](scripts/deploy.sh) | 전체 배포 | 빈 계정에서 1회 실행. 계정 ID 하드코딩 없음 |
+| [`scripts/teardown.sh`](scripts/teardown.sh) | 정리 | 역순 삭제. `--yes` 로 확인 생략 |
+
+---
+
 ## 1. 실측 결과
 
 | 항목 | 값 | 비고 |
@@ -252,10 +293,174 @@ export AWS_REGION=ap-northeast-2
 코드가 읽는 변수를 스크립트에서 하나라도 빼면 모듈 로드 시점에 `KeyError` 가 나고
 **전 라우트가 502** 가 됩니다. 그래서 변수를 추가할 때는 양쪽을 함께 고쳐야 합니다.
 
+
+### 웹 UI 사용법
+
+배포 후 CloudFront URL 로 접속하면 아래를 직접 눌러볼 수 있습니다.
+
+| 화면 요소 | 하는 일 |
+|---|---|
+| **모드 토글** | `방식 2(store)` / `방식 1(client)` 전환. 선택에 따라 **요청 바디가 달라지는 것**이 화면에 표시됩니다 |
+| **채팅** | 질문 전송 → 응답에 지연·`source`·콜드여부·`uptimeMs`·`turn` 배지가 붙습니다. **콜드는 빨강, 웜은 초록** |
+| **웜풀 재고** | 큐에 있는 uuid 를 슬롯으로 표시(3초 폴링). `[재고 보충]` `[heartbeat 실행]` 버튼 |
+| **지연 비교 차트** | 최근 호출을 막대로. **1,328ms 기준선** 표시 |
+| **시나리오 4종** | 원클릭 재현 (아래) |
+
+**시나리오 버튼이 증명하는 것**
+
+| 시나리오 | 기대 결과 |
+|---|---|
+| ① 연속 질문 3회 | 1회 `pool` → 2·3회 `reused`. **전부 웜** |
+| ② 세션 종료 후 재질문 | `StopRuntimeSession` 으로 15분 만료를 시뮬레이션. 재고가 있으면 `pool` 로 다시 웜 |
+| **③ 풀 소진** | 재고가 있는 동안 `pool`(웜) → **바닥나면 `fresh`(콜드)로 지연 급등.** 웜풀이 필요한 이유를 보여주는 핵심 |
+| ④ A/B 비교 | 같은 질문을 두 방식으로. **지연이 비슷해야 정상** — 두 방식의 차이는 성능이 아니라 운영 특성 |
+
+### API 직접 호출
+
+웹 UI 없이 `curl` 로도 전부 테스트할 수 있습니다. `$BASE` 는 배포 시 출력된 CloudFront URL 입니다.
+
+```bash
+BASE=https://<your-distribution>.cloudfront.net
+```
+
+**① 재고 보충** — 예열된 세션을 큐에 채웁니다
+
+```bash
+curl -s -XPOST $BASE/api/pool/refill \
+  -H 'content-type: application/json' -d '{"count":5}'
+# {"added": 5, "depth": 5}
+```
+
+**② 재고 확인**
+
+```bash
+curl -s $BASE/api/pool
+# {"depth":5,"target":8,"items":[{"uuid":"wp-c4d43","ageSec":6,"staleRisk":false}, ...]}
+```
+
+`uuid` 는 **앞 8자만** 노출됩니다. 전체를 내보내면 브라우저에서 남의 세션으로 호출할 수 있는 값이 됩니다.
+
+**③ 대화 — 방식 2 (store)**
+
+```bash
+curl -s -XPOST $BASE/api/chat -H 'content-type: application/json' \
+  -d '{"mode":"store","userId":"u1","prompt":"안녕"}'
+```
+
+```json
+{
+  "answer": "...", "sessionId": "wp-3e37b3...", "latencyMs": 117.9,
+  "source": "pool", "coldStart": false, "uptimeMs": 8149.2,
+  "servedByThisVm": 1, "contextRestored": true, "turn": 1, "poolDepth": 4
+}
+```
+
+같은 `userId` 로 다시 호출하면 `source` 가 `reused` 로 바뀝니다. **클라이언트는 `sessionId` 를 보내지 않습니다** — 서버의 TTL 이 만료를 판단합니다.
+
+**④ 대화 — 방식 1 (client)**
+
+클라이언트가 `sessionId` 와 `lastCallAt`(epoch 초)을 직접 관리합니다.
+
+```bash
+# 첫 호출 — 세션 정보 없이
+curl -s -XPOST $BASE/api/chat -H 'content-type: application/json' \
+  -d '{"mode":"client","userId":"u2","prompt":"첫 질문"}'
+
+# 이어서 — 응답의 sessionId 와 현재 시각을 실어 보낸다
+curl -s -XPOST $BASE/api/chat -H 'content-type: application/json' \
+  -d '{"mode":"client","userId":"u2","prompt":"두번째",
+       "sessionId":"wp-...","lastCallAt":'$(date +%s)'}'
+
+# 13분 초과 시뮬레이션 — lastCallAt 을 과거로 주면 큐에서 새로 꺼낸다
+curl -s -XPOST $BASE/api/chat -H 'content-type: application/json' \
+  -d '{"mode":"client","userId":"u2","prompt":"오래된 세션",
+       "sessionId":"wp-...","lastCallAt":'$(( $(date +%s) - 900 ))'}'
+# → source: "pool"  (만료를 감지해 교체)
+```
+
+**⑤ heartbeat** — 재고 세션의 idle 타이머를 리셋합니다
+
+```bash
+curl -s -XPOST $BASE/api/pool/heartbeat
+# {"pinged": 7, "depth": 7}
+```
+
+> ⚠️ **실행 직후 반드시 검증하십시오.** `pinged` 값만 보면 [§2 의 버그](#실배포에서-발견해-고친-버그-heartbeat가-재고를-잠갔다)를 놓칩니다.
+> ```bash
+> curl -s -XPOST $BASE/api/pool/heartbeat
+> curl -s -XPOST $BASE/api/chat -H 'content-type: application/json' \
+>   -d '{"mode":"store","userId":"hb-check","prompt":"직후"}' \
+> | python3 -c 'import sys,json; print(json.load(sys.stdin)["source"])' 
+> # pool 이어야 정상. fresh 면 재고가 잠겨 있거나 비어 있다
+> ```
+> 
+> 재고가 0이면 heartbeat 와 무관하게 `fresh` 가 나옵니다. **먼저 `/api/pool` 로
+> `depth` 가 1 이상인지 확인**한 뒤 검증하십시오.
+
+**⑥ 세션 종료** — `StopRuntimeSession` 으로 microVM 을 즉시 종료합니다
+
+```bash
+curl -s -XPOST $BASE/api/session/end \
+  -H 'content-type: application/json' -d '{"userId":"u1"}'
+# {"stopped": true, "sessionId": "wp-..."}
+```
+
+**⑦ 최근 호출 이력**
+
+```bash
+curl -s $BASE/api/metrics
+# {"calls":[{"ts":...,"mode":"store","latencyMs":117.9,"source":"pool","coldStart":false}, ...]}
+```
+
+⚠️ Lambda 컨테이너 전역에 보관하므로 **컨테이너가 재사용될 때만** 남습니다. 신뢰할 수 있는 지표 저장소가 아닙니다.
+
+### 재현 스크립트 — 풀 소진 실험
+
+README 2절의 결과를 그대로 재현합니다. **이 데모가 증명하려는 것이 한 번에 보이는 실험입니다.**
+
+`drain.sh` 로 저장해 실행하십시오. (한 줄 `for` 문으로 쓰면 셸 따옴표 이스케이프가 깨집니다)
+
+```bash
+#!/usr/bin/env bash
+# drain.sh — 재고가 바닥나는 지점에서 지연이 뛰는 것을 확인한다
+BASE=${BASE:?BASE 를 설정하십시오}
+
+curl -s -XPOST "$BASE/api/pool/refill" \
+  -H 'content-type: application/json' -d '{"count":3}' > /dev/null
+
+for i in $(seq 1 6); do
+  curl -s -XPOST "$BASE/api/chat" -H 'content-type: application/json' \
+    -d '{"mode":"store","userId":"drain-'$RANDOM'-'$i'","prompt":"신규"}' \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f\"{d['latencyMs']:>8}ms  {d['source']:7} cold={d['coldStart']}\")"
+done
+```
+
+```bash
+BASE=https://<your-distribution>.cloudfront.net bash drain.sh
+```
+
+실제 실행 결과입니다. **재고가 바닥나는 지점에서 지연이 14배 뜁니다.**
+
+```
+    90.2ms  pool    cold=False
+   108.7ms  pool    cold=False
+    93.1ms  pool    cold=False     ← 재고 3개 소진
+  1295.7ms  fresh   cold=True
+  1320.6ms  fresh   cold=True
+  1227.1ms  fresh   cold=True
+```
+
+콜드 구간(1,227~1,321ms)이 [1절의 콜드스타트 실측 p50 1,328ms](#1-실측-결과)와 일치합니다.
+**같은 코드·같은 런타임에서 풀 재고 유무만으로 갈린 차이**입니다.
+
 ### 정리
 
 ```bash
-./scripts/teardown.sh
+./scripts/teardown.sh          # 대상 목록을 보여주고 확인을 받는다
+./scripts/teardown.sh --yes    # 확인 생략
 ```
 
 ---
@@ -402,9 +607,4 @@ microVM을 자유롭게 교체할 수 있습니다.
 원문에 있는 내용과 이 레포에서 추가 설계한 부분의 구분은
 [`docs/architecture.md`](docs/architecture.md)에 정리했습니다.
 
-### 상세 문서
-
-| 문서 | 내용 |
-|---|---|
-| [`docs/architecture.html`](docs/architecture.html) | **SVG 아키텍처 다이어그램 + 시나리오 8개 + 실배포 검증 결과.** 브라우저로 열어보십시오 |
-| [`docs/architecture.md`](docs/architecture.md) | 두 방식의 요청 흐름, heartbeat·8시간 rolling replacement 설계 근거 |
+문서 목록과 보는 법은 [0절](#0-문서와-코드)에 있습니다.

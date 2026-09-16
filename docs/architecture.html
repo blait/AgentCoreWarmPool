@@ -140,7 +140,8 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);
   <h1>AgentCore Runtime 웜풀 아키텍처</h1>
   <div class="sub">콜드스타트 제거를 위한 SQS 사전 예열 세션 풀 — 세션 ID 관리 방식 2종 비교</div>
   <div class="meta">
-    <span class="pill m">실측 기준 콜드 1,328ms → 웜 101ms</span>
+    <span class="pill m">실측 콜드 1,328ms → 웜 101ms</span>
+    <span class="pill m">실배포 검증 완료 · 두 방식 모두 동작</span>
     <span class="pill">ap-northeast-2</span>
     <span class="pill">idle 15분 유지 전제</span>
     <span class="pill">2026-09-11</span>
@@ -153,11 +154,11 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);
     <li><a href="#comp">공통 컴포넌트</a></li>
     <li><a href="#w1">방식 1 — 클라이언트 타이머</a></li>
     <li><a href="#w2">방식 2 — Redis TTL <span class="tag t-ok">추천</span></a></li>
-    <li><a href="#hb">Heartbeat — 재고 유지</a></li>
+    <li><a href="#hb">Heartbeat — 재고 유지 <span class="tag t-no">실측 버그</span></a><br><span style="font-size:12px;padding-left:2px">└ <a href="#hb-vt0">VisibilityTimeout=0 으로 해결</a></span></li>
     <li><a href="#sc">시나리오별 동작</a></li>
     <li><a href="#size">풀 크기 산정</a></li>
     <li><a href="#risk">리스크와 미확인 사항</a></li>
-    <li><a href="#live">실배포 검증 결과 <span class="tag t-ok">신규</span></a></li>
+    <li><a href="#live">실배포 검증 결과 <span class="tag t-ok">실측</span></a></li>
   </ol>
 </div>
 
@@ -168,6 +169,16 @@ footer{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);
 동일 코드를 두 배포 방식으로 서울 리전에 배포해 측정한 결과입니다. 세션 재사용의
 이득이 배포 방식 선택보다 훨씬 큽니다.
 </p>
+<div class="note good">
+  <b>이 문서는 설계안이 아니라 검증된 구성입니다</b>
+  아래 설계를 실제로 AWS에 배포해 <b>두 방식 모두 동작을 확인</b>했습니다
+  (§9). 구현 코드는
+  <a href="https://github.com/blait/AgentCoreWarmPool">github.com/blait/AgentCoreWarmPool</a>
+  에 있고, 웹 UI에서 직접 눌러 지연 차이를 볼 수 있습니다.
+  <br><br>
+  검증 과정에서 <b>heartbeat가 웜풀을 무력화시키는 버그</b>를 발견해 고쳤습니다 —
+  설계만으로는 드러나지 않는 함정이므로 <a href="#hb-bug">§5-1</a>을 먼저 보시길 권합니다.
+</div>
 
 <table>
 <thead><tr><th>구분</th><th>p50</th><th>비고</th></tr></thead>
@@ -690,13 +701,204 @@ Redis에 <b>TTL 780초</b>로 uuid를 저장합니다. 만료 판단을 Redis가
 </tbody>
 </table>
 
-<div class="note good">
-  <b>실제로는 거의 발동하지 않습니다</b>
-  재고 소비 61/s면 214개가 <b>약 3.5초에 한 바퀴 회전</b>합니다. 피크 시간엔 만료될 틈이 없습니다.
+<div class="note bad">
+  <b>⚠️ 호출 부담은 작지만, 구현 난도는 작지 않습니다 — 실측으로 확인</b>
+  위 표의 "0.3 TPS"는 <b>호출 횟수</b> 얘기입니다. 실제로 구현해보니
+  <b>heartbeat 자체가 웜풀을 무력화시키는 버그</b>를 냈습니다(<a href="#hb-bug">§5-1</a>). 해결책은 <a href="#hb-vt0">§5-2</a> — <b><code>VisibilityTimeout=0</code> 으로 훑고 핑만 쏜다.</b>
   <br><br>
-  <b>문제는 저트래픽 시간대(새벽)입니다.</b> 재고가 그대로 앉아 있다가 전부 죽고,
-  아침 첫 유저들이 콜드스타트를 맞습니다. → <b>heartbeat는 이 구간용 안전망입니다.</b>
-  그 시간대엔 재고를 줄여도 되므로(원문도 오프피크 축소 권고) heartbeat 부담도 함께 내려갑니다.
+  <b>heartbeat를 넣기 전보다 나빠질 수 있습니다.</b> 안 넣으면 저트래픽 구간에서만
+  콜드스타트가 나지만, 잘못 넣으면 <b>heartbeat를 돌린 직후마다 전 유저가</b>
+  콜드스타트를 맞습니다.
+</div>
+
+<div class="note">
+  <b>언제 필요한가</b>
+  재고 소비 61/s면 214개가 약 3.5초에 한 바퀴 회전하므로 <b>피크 시간엔 만료될 틈이 없습니다.</b>
+  문제는 <b>저트래픽 시간대(새벽)</b>입니다 — 재고가 앉은 채 전부 죽고 아침 첫 유저들이
+  콜드스타트를 맞습니다. heartbeat는 이 구간용 안전망이고, 그 시간대엔 재고를 줄여도
+  되므로(원문도 오프피크 축소 권고) 부담이 함께 내려갑니다.
+</div>
+
+<h3 id="hb-bug">5-1. heartbeat가 웜풀을 무력화시킨 실제 사례 ⭐</h3>
+<p style="font-size:13.5px">
+데모를 배포해 heartbeat를 처음 돌렸을 때 나온 결과입니다. <b>목적과 정반대가 됐습니다.</b>
+</p>
+
+<pre class="d">heartbeat 실행 → {"pinged": 3, "depth": 3}     ← <span class="c-g">성공으로 보고한다</span>
+SQS 실제 상태  → visible=0, invisible=3        ← <span class="c-a">그런데 재고 전부가 잠김</span>
+이어진 요청     → 1329.5ms  source=fresh       ← <span class="c-a">전 유저가 콜드스타트</span>
+
+가시성 회복까지 약 40초</pre>
+
+<h4>원인 — SQS의 "숨는" 성질</h4>
+<p style="font-size:13.5px">
+SQS에서 메시지를 <code>receive</code>하면 사라지지 않고 <b>일정 시간 숨습니다</b>
+(이 큐는 <code>VisibilityTimeout=30</code>). 중복 처리를 막는 장치입니다.
+그런데 heartbeat는 <b>핑을 쏘려면 uuid를 꺼내봐야</b> 합니다.
+</p>
+
+<pre class="d">heartbeat 1회 동작
+   ① receive  → uuid 꺼냄 (이 순간부터 30초간 안 보임)
+   ② warmup 핑 → microVM 살림
+   ③ delete + send → 큐에 돌려놓음
+
+재고를 다 훑으려고 ①~③을 여러 라운드 돌렸더니:
+
+   1바퀴:  A B C 꺼냄 → 핑 → 돌려놓음
+   2바퀴:  <span class="c-a">돌려놓은 A B C 를 또 꺼냄</span> → 다시 30초간 숨음   ← 여기
+   3바퀴:  ...
+   종료 시점: 재고 전부가 "숨은" 상태</pre>
+
+<div class="note bad">
+  <b>세션은 멀쩡히 살아 있는데 아무도 못 씁니다</b>
+  pop이 빈손이 되어 "재고 없네" 판단으로 새 세션을 만들고, 그게 콜드스타트입니다.
+  <b>예열해 둔 자원이 있는데도 콜드스타트가 나므로, 웜풀을 운영하는 목적 자체가 무너집니다.</b>
+</div>
+
+<h4>1차 수정 — receive를 1회로 제한 (불충분)</h4>
+<pre class="d">한 번에 최대 10건만 처리하고 끝낸다. 돌려놓은 것을 다시 잡을 일이 없어진다.
+
+<b>수정 전</b>  heartbeat → invisible=3,  다음 요청 <span class="c-a">1329.5ms  source=fresh</span>
+<b>수정 후</b>  heartbeat → invisible=0,  다음 요청 <span class="c-g">  98.3ms  source=pool</span></pre>
+<p style="font-size:13.5px">
+끝난 뒤 잠김은 사라졌지만, <b>도는 동안의 잠김은 그대로 남습니다.</b>
+50ms 간격으로 큐를 추적해 보면 이렇습니다.
+</p>
+<pre class="d">t=138ms   visible=6   invisible=0    ← 정상
+t=295ms   visible=1   <span class="c-a">invisible=7</span>    ← heartbeat 가 7개를 한꺼번에 잠갔다
+                                     이때 재고가 7개 이하였으면 pop 은 빈손</pre>
+<div class="note warn">
+  <b>재고 8개라 1개가 남아 우연히 통과했습니다</b>
+  같은 조건을 재고 5개로 돌리면 전부 잠겨 콜드스타트가 납니다.
+  <code>delete + send</code> 구조에는 이 잠김이 <b>내재</b>되어 있습니다.
+</div>
+
+<h3 id="hb-vt0">5-2. ⭐ 근본 해결 — heartbeat 는 <code>VisibilityTimeout=0</code> 으로 훑는다</h3>
+<p class="lede">
+애초에 <b>메시지를 큐에서 빼낼 이유가 없습니다.</b> heartbeat 에 필요한 것은
+uuid 목록뿐이고, 그걸로 핑을 쏘면 끝입니다.
+</p>
+
+<pre class="d"><span class="c-g">권장</span>  heartbeat
+   ① receive( <b>VisibilityTimeout=0</b> )   ← 꺼내 봐도 잠그지 않는다
+   ② 각 uuid 에 warmup 핑
+   ③ 끝. <b>delete·send 하지 않는다</b>
+
+<span class="c-a">비권장</span>  receive(VT=30) → 핑 → delete → send   ← 잠김·유실 위험</pre>
+
+<h4><code>VisibilityTimeout</code> 이 무엇인가</h4>
+<table>
+<thead><tr><th>값</th><th>동작</th><th>용도</th></tr></thead>
+<tbody>
+<tr><td class="k">VT = 30 (기본)</td>
+    <td>꺼내면 <b>30초간 다른 호출자에게 안 보인다</b></td>
+    <td><b>pop</b> — 중복 배포를 막아야 한다</td></tr>
+<tr><td class="k">VT = 0</td>
+    <td>꺼내도 <b>계속 다른 호출자에게 보인다</b></td>
+    <td><b>heartbeat · 재고 조회</b> — 잠글 필요가 없다</td></tr>
+</tbody>
+</table>
+
+<h4>실측 — 8라운드 반복해도 한 번도 잠기지 않았다</h4>
+<pre class="d">receive(VisibilityTimeout=0) 를 8회 연속 실행
+
+  라운드1: 6건 수신   vis/invis = <span class="c-g">6/0</span>
+  라운드2: 6건 수신   vis/invis = <span class="c-g">6/0</span>
+  ...
+  라운드8: 6건 수신   vis/invis = <span class="c-g">6/0</span>
+
+고유 uuid 6개 · 각각 8번씩 조회됨 · <b>invisible 이 한 번도 0을 벗어나지 않음</b>
+
+이어서 6개 전부에 핑(2,105ms) → 직후 요청 <span class="c-g">103.7ms  source=pool</span></pre>
+
+<div class="note good">
+  <b>왜 heartbeat 는 잠금이 필요 없는가</b>
+  SQS 의 잠금은 <b>두 워커가 같은 작업을 중복 처리하는 것</b>을 막는 장치입니다.
+  그런데 heartbeat 가 하는 일은 <b>핑을 한 번 더 쏘는 것</b>이고, 중복으로 쏴도
+  해가 없습니다 — idle 타이머가 또 리셋될 뿐입니다.
+  <br><br>
+  <b>보호할 가치가 없는 것을 보호하려고 정작 중요한 pop 을 막고 있었습니다.</b>
+</div>
+
+<div class="note bad">
+  <b>⚠️ 단, pop 에는 절대 <code>VT=0</code> 을 쓰지 마십시오</b>
+  pop 은 중복이 <b>치명적</b>입니다. 같은 uuid 가 두 유저에게 나가면 한 microVM 을
+  공유해 <b>대화가 섞입니다.</b> pop 은 <code>receive</code> 후 <b>즉시
+  <code>delete</code></b> 해야 합니다.
+  <br><br>
+  <code>heartbeat → VT=0</code> · <code>pop → receive + delete</code> —
+  <b>동작에 따라 반대로 설정합니다.</b>
+</div>
+
+<h4>부수 효과</h4>
+<table>
+<thead><tr><th></th><th>delete + send</th><th><code>VT=0</code> 훑기</th></tr></thead>
+<tbody>
+<tr><td>SQS 호출 수</td><td>receive + delete + send = <b>3×N</b></td><td><b>receive 1회</b></td></tr>
+<tr><td>재고 잠김</td><td>도는 동안 잠긴다</td><td><span class="tag t-ok">구조적으로 불가</span></td></tr>
+<tr><td>중간에 죽으면</td><td><b>uuid 유실</b> (delete 후 send 전)</td><td><span class="tag t-ok">아무 일 없음</span></td></tr>
+<tr><td><code>lastPingAt</code> 갱신</td><td>큐 메시지에 기록 가능</td><td>불가 → 별도 저장소 필요</td></tr>
+</tbody>
+</table>
+
+<div class="note">
+  <b>잃는 것 하나 — <code>lastPingAt</code></b>
+  큐 메시지를 건드리지 않으므로 "마지막 핑 시각"을 메시지에 쓸 수 없고,
+  재고 화면의 <code>staleRisk</code> 표시가 부정확해집니다.
+  <b>핑 시각은 DynamoDB 나 Lambda 전역에 <code>{uuid: 시각}</code> 으로 따로 두면
+  됩니다</b> — 애초에 큐 안에 있어야 할 값이 아니었습니다.
+</div>
+
+<div class="note warn">
+  <b>남는 제약 — 한 번에 10개까지만 보인다</b>
+  <code>MaxNumberOfMessages</code> 상한이 10입니다. 재고가 그보다 많으면 여러 번
+  호출해야 하는데, <b>SQS 는 매 호출이 전체를 균등히 샘플링한다고 보장하지 않습니다.</b>
+  같은 10개가 반복해 나올 수 있어 <b>재고가 클 때 전수 커버가 보장되지 않습니다.</b>
+  <br><br>
+  재고가 수백 개인 프로덕션에서는 <b>재고 목록을 DynamoDB 로 관리</b>하고 SQS 는
+  순서·배포에만 쓰는 편이 확실합니다.
+</div>
+
+<h4>8시간 폐기만 <code>delete</code> 를 쓴다</h4>
+<pre class="d">heartbeat  : receive(<b>VT=0</b>) → 핑 → 끝                 (재고를 건드리지 않음)
+정리(rolling): receive(VT=30) → 7시간 초과분만 <b>delete</b>   (제거가 목적이므로 잠금이 맞다)</pre>
+<p style="font-size:13.5px">
+<code>maxLifetime</code> 8시간 초과분은 <b>큐에서 빼내야</b> 하므로 이때는
+잠그고 <code>delete</code> 하는 것이 맞습니다. <b>"살리기"와 "버리기"를 분리</b>하면
+각각에 맞는 설정을 쓸 수 있습니다.
+</p>
+
+<h4>왜 이 버그가 위험한가</h4>
+<table>
+<thead><tr><th>특성</th><th>결과</th></tr></thead>
+<tbody>
+<tr><td><b>성공으로 보고한다</b></td><td><code>{"pinged": 3}</code> — 로그만 보면 정상</td></tr>
+<tr><td><b>에러가 나지 않는다</b></td><td>유저는 "그냥 느림"만 경험. 알림이 울리지 않음</td></tr>
+<tr><td><b>40초 뒤 저절로 낫는다</b></td><td>재현이 어려워 원인 추적이 힘들다</td></tr>
+<tr><td><b>문서에 없다</b></td><td>원문은 heartbeat를 "필요하다" 한 줄로만 언급</td></tr>
+</tbody>
+</table>
+
+<div class="note warn">
+  <b>운영 전 필수 검증</b>
+  <b>heartbeat를 돌린 직후 바로 요청해서 <code>source=pool</code>이 나오는지</b> 확인하십시오.
+  heartbeat 자체가 성공했는지(<code>pinged</code>)만 보면 이 버그를 놓칩니다.
+  <br><br>
+  함께 볼 것: SQS <code>ApproximateNumberOfMessagesNotVisible</code>.
+  heartbeat <b>도는 중에도, 끝난 직후에도</b> 이 값이 0이어야 합니다.
+  0이 아니면 재고가 잠겨 있다는 뜻입니다 → <a href="#hb-vt0">§5-2</a> 의
+  <code>VisibilityTimeout=0</code> 을 적용하십시오.
+</div>
+
+<div class="note">
+  <b>같은 계열의 함정 — FIFO 큐 두 가지</b>
+  <b>① MessageGroupId</b>를 전체에 하나로 주면, FIFO는 한 그룹의 메시지가 처리 중일 때
+  같은 그룹의 다른 메시지를 내주지 않습니다. 위와 같은 증상이 납니다 →
+  <b>uuid별로 그룹을 쪼개십시오.</b>
+  <br>
+  <b>② MessageDeduplicationId</b>를 재사용하면 FIFO의 5분 중복 제거 창에 걸려
+  <b>성공 응답을 받지만 전달되지 않습니다.</b> heartbeat는 같은 uuid를 반복 환원하므로
+  이걸 놓치면 재고가 조용히 사라집니다 → <b>매번 새 값을 주십시오.</b>
 </div>
 
 <div class="note warn">
@@ -869,7 +1071,34 @@ StopRuntimeSession 적용:
   Redis 안정화 후 이전하는 것이 안전합니다.
 </div>
 
-<h3>미확인 — 아래는 추정이며 실측이 아닙니다</h3>
+<h3>실배포로 해소된 항목</h3>
+<p style="font-size:13.5px">
+문서 작성 시점에 추정이었던 것 중 <b>아래는 §9에서 실측으로 확인</b>되었습니다.
+</p>
+<table>
+<thead><tr><th>항목</th><th>결과</th></tr></thead>
+<tbody>
+<tr><td>두 방식이 실제로 동작하는가</td>
+    <td><span class="tag t-ok">확인</span> 방식 2 <b>117.9→104.5→84.2ms</b>,
+        방식 1 13분 초과 시 <code>source=pool</code> 125ms</td></tr>
+<tr><td>풀 소진 시 폴백이 동작하는가</td>
+    <td><span class="tag t-ok">확인</span> 재고 소진 후 <b>1,263~1,350ms</b> —
+        §1의 콜드 실측 1,328ms와 일치</td></tr>
+<tr><td>warmup 센티널이 실제로 예열 효과를 내는가</td>
+    <td><span class="tag t-ok">확인</span> 예열이 <b>1,489ms를 흡수</b>, 실제 질문 144ms</td></tr>
+<tr><td>heartbeat 부담이 정말 작은가</td>
+    <td><span class="tag t-no">아니오</span> 호출 수는 작지만
+        <b>구현이 웜풀을 무력화</b>시켰다 → <a href="#hb-bug">§5-1</a></td></tr>
+<tr><td>죽은 uuid로 호출하면 어떻게 되나</td>
+    <td><span class="tag t-ok">확인</span> <b>HTTP 200 + 콜드스타트</b>(1,453ms).
+        에러가 아니므로 <b>조용히 느려진다</b></td></tr>
+<tr><td>런타임 세션 상태를 조회할 수 있나</td>
+    <td><span class="tag t-no">불가</span> <code>ListSessions</code>는 Memory API다.
+        만료 여부를 물을 수 없어 <b>TTL·시간 기반 판단이 유일</b></td></tr>
+</tbody>
+</table>
+
+<h3>여전히 미확인 — 아래는 추정이며 실측이 아닙니다</h3>
 <table>
 <thead><tr><th>#</th><th>항목</th><th>영향</th></tr></thead>
 <tbody>
@@ -877,7 +1106,7 @@ StopRuntimeSession 적용:
     <td>214개 계산의 <b>3.5초는 부팅 시간 대용값</b>. 실제 보충률이 낮으면 풀이 더 커야 함</td></tr>
 <tr><td>2</td><td><b>재방문 빈도</b></td>
     <td>시나리오 3·4의 큐 소비량 → <b>풀 크기 직접 결정</b></td></tr>
-<tr><td>3</td><td>챗봇 UI 오픈 → 첫 질문 간격</td>
+<tr><td>3</td><td>챗봇 UI 오픈 → 첫 질문 간격 <span class="src">(핑 방식 성립 조건)</span></td>
     <td>핑 방식(큐 없이)만으로 충분한지 판단 근거</td></tr>
 <tr><td>4</td><td>닫기 이벤트 포착률</td>
     <td>동시 세션 절감 실효치</td></tr>
@@ -917,6 +1146,12 @@ StopRuntimeSession 적용:
 <li><b>StopRuntimeSession 적용</b><br>
   웜풀과 무관하게 즉시 유효. 동시 세션·EC2 압박 완화</li>
 <li><b>쿼터 증설</b> — <code>L-8EE2AEA2</code> + <code>L-3E5722B2</code> 세트</li>
+<li><b>heartbeat 직후 pop 검증</b><br>
+  heartbeat 는 <b><code>VisibilityTimeout=0</code> 으로 훑고 핑만</b> 쏘도록
+  구현하십시오(<a href="#hb-vt0">§5-2</a>). 그리고 <b>heartbeat 실행 → 즉시 요청 →
+  <code>source=pool</code>인지</b> 확인. <code>ApproximateNumberOfMessagesNotVisible</code>
+  이 도는 중에도 0이어야 합니다. 이걸 빼면 <a href="#hb-bug">§5-1</a>의 버그를
+  프로덕션에서 만납니다</li>
 <li><b>핑 방식 먼저 시도</b> → 부족하면 SQS 웜풀</li>
 </ol>
 </section>
@@ -993,9 +1228,25 @@ heartbeat가 재고를 다 훑으려고 <code>receive</code>를 여러 라운드
 환원한 메시지가 같은 실행에서 다시 잡히며 <code>VisibilityTimeout</code>이 재적용됐습니다.
 <b>예열된 세션이 살아 있는데도 pop이 빈손이 되어, 웜풀의 목적 자체가 무너지는 버그입니다.</b>
 </p>
-<p style="font-size:13.5px"><b>수정</b>:
-receive를 <b>1회(최대 10건)로 제한</b>. 처리한 메시지는 전부 delete되므로 재고가 잠기지 않습니다.
-재고가 10개를 넘으면 함수를 여러 번 호출합니다.
+<p style="font-size:13.5px"><b>1차 수정</b>:
+receive를 1회(최대 10건)로 제한. <b>끝난 뒤</b>의 잠김은 사라졌습니다.
+</p>
+<pre class="d">수정 후:
+heartbeat → {"pinged": 7, "depth": 7}   ·  SQS: visible=7, invisible=0
+직후 요청1:  95.5ms  source=pool  <span class="c-g">웜</span>
+직후 요청2: 103.7ms  source=pool  <span class="c-g">웜</span></pre>
+<p style="font-size:13.5px"><b>그런데 도는 동안의 잠김은 남아 있었습니다.</b>
+50ms 간격 추적:
+</p>
+<pre class="d">t=138ms   visible=6   invisible=0
+t=295ms   visible=1   <span class="c-a">invisible=7</span>   ← 재고 7개를 한꺼번에 잠갔다
+
+재고가 8개라 1개 남아 우연히 통과. <b>7개 이하였으면 콜드스타트.</b></pre>
+<p style="font-size:13.5px"><b>근본 수정</b>:
+heartbeat 는 <code>receive(<b>VisibilityTimeout=0</b>)</code> 로 <b>훑기만 하고
+핑만 쏩니다</b> — <code>delete</code>·<code>send</code> 를 하지 않습니다.
+8라운드 반복해도 <code>invisible</code> 이 0을 벗어나지 않았습니다.
+상세는 <a href="#hb-vt0">§5-2</a>.
 </p>
 <pre class="d">수정 후:
 heartbeat → {"pinged": 7, "depth": 7}   ·  SQS: visible=7, invisible=0
@@ -1034,10 +1285,10 @@ heartbeat → {"pinged": 7, "depth": 7}   ·  SQS: visible=7, invisible=0
   원문: <a href="https://repost.aws/articles/ARCJIn3t7aRC2FxiRTV1SuCA/minimizing-startup-latency-with-amazon-bedrock-agentcore-runtime">Minimizing startup latency with Amazon Bedrock AgentCore Runtime</a>
   (AWS re:Post, 2026-05-06) · 상세 번역 <code>agentcore-startup-latency-ko.md</code> ·
   실측 결과 <code>agentcore-coldstart-test-result.md</code>
-  <br>실측: 2026-09-10, ap-northeast-2 · 문서 작성: 2026-09-11
+  <br>실측: 2026-09-10 (콜드/웜·풀 크기), 2026-09-14 (실배포 검증) · ap-northeast-2<br>데모 구현: <a href="https://github.com/blait/AgentCoreWarmPool">github.com/blait/AgentCoreWarmPool</a>
   <br><br>
   <b>수치 출처 구분</b> — 101ms / 1,328ms / 379ms / 3,337ms / 풀 10개 / idle 최소 60초 /
-  죽은 uuid HTTP 200 은 <b>직접 실측</b>입니다.
+  죽은 uuid HTTP 200, 그리고 §9의 모든 수치는 <b>직접 실측</b>입니다.
   214개 / 61 TPS / 71,500 / 16,500 은 <b>고객 파라미터 기반 계산값</b>이며,
   보충 시간 3.5초는 <b>부팅 시간 대용 추정값</b>입니다.
 </footer>
